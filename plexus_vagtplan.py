@@ -20,20 +20,19 @@ MÅN_GEN   = ["","januar","februar","marts","april","maj","juni",
              "juli","august","september","oktober","november","december"]
 
 OPEN="open"; CLOSED="closed"; ACTIVITY="activity"
-SETUP_CYCLE  = {OPEN:CLOSED, CLOSED:ACTIVITY, ACTIVITY:OPEN}
-SETUP_STYLE  = {
+SETUP_CYCLE = {OPEN:CLOSED, CLOSED:ACTIVITY, ACTIVITY:OPEN}
+SETUP_STYLE = {
     OPEN:     ("#c8e6c9","#43a047","#1b5e20","🟢","Åben"),
     CLOSED:   ("#ffcdd2","#e53935","#b71c1c","🔴","Lukket"),
     ACTIVITY: ("#bbdefb","#1e88e5","#0d47a1","🔵","Aktivitet"),
 }
-PREF_CYCLE   = {"":"sikker","sikker":"måske","måske":""}
-PREF_STYLE   = {
-    "":       ("#f8f9fa","#dee2e6","#555555","⬜","Ikke valgt"),
+PREF_CYCLE  = {"":"sikker","sikker":"måske","måske":""}
+PREF_STYLE  = {
+    "":       ("#f8f9fa","#dee2e6","#555","⬜","Ikke valgt"),
     "sikker": ("#c8e6c9","#43a047","#1b5e20","✅","Ja"),
     "måske":  ("#fff9c4","#fbc02d","#6d4c00","🟡","Måske"),
 }
 
-# ── CSS ───────────────────────────────────────────────────────────────────────
 CSS = """
 <style>
 .block-container{padding-top:1.2rem !important}
@@ -45,19 +44,10 @@ div[data-testid="stMetric"] [data-testid="stMetricValue"]{
     font-size:28px !important;font-weight:800 !important}
 div[data-testid="stTabs"] button[data-baseweb="tab"]{
     font-size:14px !important;font-weight:600 !important;padding:8px 18px !important}
-/* Calendar cell buttons */
-div:has(>div>div[id^="cal-"])+div button{
-    min-height:82px !important;
-    white-space:pre-wrap !important;
-    line-height:1.45 !important;
-    font-size:12px !important;
-    font-weight:700 !important;
-    border-radius:12px !important;
-    padding:10px 4px !important;
-    cursor:pointer !important}
-div:has(>div>div[id^="cal-"])+div button:hover{
-    opacity:0.88 !important;
-    transform:scale(1.03) !important}
+.stButton>button{border-radius:10px !important;font-weight:500 !important}
+.stButton>button[kind="primary"]{
+    background:linear-gradient(135deg,#1565c0,#0d47a1) !important;
+    border:none !important;color:white !important}
 </style>
 """
 
@@ -97,39 +87,46 @@ def next_plan_month(data:dict)->tuple:
         now=datetime.now(); y,m=now.year,now.month
     return (y+1,1) if m==12 else (y,m+1)
 
-# ── Hjælpere til kalender-celler ──────────────────────────────────────────────
-def _cal_css(cells:dict):
-    """Inject CSS for colored calendar cells.
-    cells: { "cal-ID": (bg_color, border_color, text_color) }
-    Uses :has() to target the button that follows the anchor div.
-    """
-    rules="".join(
-        f'div:has(>div>#{cid})+div button{{'
-        f'background-color:{bg}!important;'
-        f'border:2px solid {bo}!important;'
-        f'color:{tc}!important}}'
-        for cid,(bg,bo,tc) in cells.items()
-    )
-    if rules:
-        st.markdown(f"<style>{rules}</style>",unsafe_allow_html=True)
-
-def _anchor(cid:str):
-    """Invisible anchor div enabling CSS cell coloring."""
-    st.markdown(
-        f'<div id="{cid}" style="height:0;line-height:0;'
-        f'overflow:hidden;margin:0;padding:0"></div>',
-        unsafe_allow_html=True)
-
+# ── Kalender-hjælpere ─────────────────────────────────────────────────────────
 def _dag_header(border_color:str,text_color:str):
     cols=st.columns(7)
     for i in range(7):
         is_vd=i in VAGTDAG_IDX
         cols[i].markdown(
             f'<div style="text-align:center;font-size:11px;font-weight:700;'
-            f'padding:5px 0;letter-spacing:0.6px;text-transform:uppercase;'
+            f'padding:5px 0;letter-spacing:0.5px;text-transform:uppercase;'
             f'border-bottom:3px solid {"" if not is_vd else border_color};'
             f'color:{text_color if is_vd else "#ccc"}">'
             f'{DAG_LANG[i][:3]}</div>',unsafe_allow_html=True)
+
+def _colored_cell(bg:str,border:str,text:str,
+                   dag:str,day:int,maan:str,status:str):
+    """Farvet celle – vises OVER knappen."""
+    st.markdown(
+        f'<div style="background:{bg};border:2px solid {border};'
+        f'border-radius:10px 10px 0 0;padding:8px 4px 6px;text-align:center;'
+        f'min-height:84px">'
+        f'<div style="font-size:9px;font-weight:700;color:{text};'
+        f'text-transform:uppercase;letter-spacing:0.4px">{dag}</div>'
+        f'<div style="font-size:26px;font-weight:900;color:{text};line-height:1.1">{day}</div>'
+        f'<div style="font-size:9px;color:{text};opacity:0.8">{maan}</div>'
+        f'<div style="font-size:11px;font-weight:600;color:{text};margin-top:3px">{status}</div>'
+        f'</div>',unsafe_allow_html=True)
+
+def _grey_cell(dag:str,day:int,maan:str,label:str=""):
+    """Grå, ikke-klikbar celle."""
+    st.markdown(
+        f'<div style="background:#f0f0f0;border:1px dashed #ccc;'
+        f'border-radius:10px;padding:8px 4px 6px;text-align:center;'
+        f'min-height:84px;color:#bbb">'
+        f'<div style="font-size:9px;font-weight:700;text-transform:uppercase">{dag}</div>'
+        f'<div style="font-size:26px;font-weight:900;line-height:1.1">{day}</div>'
+        f'<div style="font-size:9px;opacity:0.8">{maan}</div>'
+        f'<div style="font-size:11px;margin-top:3px">{label}</div>'
+        f'</div>',unsafe_allow_html=True)
+
+def _empty_cell():
+    st.markdown('<div style="min-height:110px"></div>',unsafe_allow_html=True)
 
 # ── Fordelingsalgoritme ───────────────────────────────────────────────────────
 def auto_assign(data:dict,mkey:str)->dict:
@@ -138,7 +135,7 @@ def auto_assign(data:dict,mkey:str)->dict:
     dt         = get_date_types(cfg,y,m)
     active_d   = [d for d,t in dt.items() if t in (OPEN,ACTIVITY)]
     min_per    = cfg.get("min_per_shift",3)
-    max_per    = cfg.get("max_per_shift",4)
+    max_per    = cfg.get("max_per_shift",3)
     prefs_m    = data["preferences"].get(mkey,{})
     vols       = data["volunteers"]
     active     = [vid for vid,v in vols.items() if v.get("active",True)]
@@ -151,10 +148,6 @@ def auto_assign(data:dict,mkey:str)->dict:
 
     remaining={vid:vols[vid].get("required_shifts",2) for vid in active}
     shifts={d:[] for d in active_d}
-    open_days_count={d:0 for d in active_d}  # for fairness tracking
-
-    # Sort by scarcity
-    sorted_dates=sorted(active_d,key=lambda d:sum(1 for v in active if prio[v][d]>0))
 
     def cand_groups(d):
         if dt.get(d)==ACTIVITY:
@@ -169,7 +162,9 @@ def auto_assign(data:dict,mkey:str)->dict:
             [v for v in active if prio[v][d]==1],
         ]
 
-    # Fase 1: opnå min_per_shift på åbne dage
+    sorted_dates=sorted(active_d,key=lambda d:sum(1 for v in active if prio[v][d]>0))
+
+    # Fase 1: opnå min_per_shift
     for d in sorted_dates:
         if len(shifts[d])>=min_per: continue
         for grp in cand_groups(d):
@@ -177,35 +172,24 @@ def auto_assign(data:dict,mkey:str)->dict:
             cands.sort(key=lambda v:remaining[v],reverse=True)
             for v in cands:
                 if len(shifts[d])>=min_per: break
-                shifts[d].append(v); remaining[v]-=1; open_days_count[d]+=1
+                shifts[d].append(v); remaining[v]-=1
 
-    # Fase 2: rund-robin fordeling af resterende kvote
-    # Prioritér frivillige med færrest åbne dage (fairness)
-    vol_open_days={vid:sum(1 for d in active_d if vid in shifts[d]) for vid in active}
-
+    # Fase 2: fair round-robin fordeling af resterende kvote
+    vol_open={vid:sum(1 for d in active_d if vid in shifts[d]) for vid in active}
     any_assigned=True
     while any_assigned:
         any_assigned=False
-        # Sorter: mest åbne dage mangler, højest resterende kvote
-        for vid in sorted(active,
-                          key=lambda v:(remaining[v],-vol_open_days[v]),
-                          reverse=True):
+        for vid in sorted(active,key=lambda v:(remaining[v],-vol_open[v]),reverse=True):
             if remaining[vid]<=0: continue
-            # Prioritér åbne dage med plads (fairness)
             cands=[d for d in active_d
                    if prio[vid][d]>0 and vid not in shifts[d] and len(shifts[d])<max_per]
             if not cands: continue
-            # Foretræk dage der mangler folk (under min) → åbner nye dage
             cands.sort(key=lambda d:(len(shifts[d])>=min_per,-prio[vid][d],len(shifts[d])))
-            best=cands[0]
-            shifts[best].append(vid); remaining[vid]-=1
-            vol_open_days[vid]+=1
-            any_assigned=True
-            break  # ét ad gangen → round-robin
+            shifts[cands[0]].append(vid); remaining[vid]-=1; vol_open[vid]+=1
+            any_assigned=True; break
 
-    open_d   =[d for d in active_d if len(shifts[d])>=min_per]
-    closed_d =[d for d in active_d if len(shifts[d])<min_per]+\
-              [d for d,t in dt.items() if t==CLOSED]
+    open_d    =[d for d in active_d if len(shifts[d])>=min_per]
+    closed_d  =[d for d in active_d if len(shifts[d])<min_per]+[d for d,t in dt.items() if t==CLOSED]
     activity_d=[d for d in active_d if dt.get(d)==ACTIVITY]
 
     data["assignments"][mkey]={
@@ -216,7 +200,7 @@ def auto_assign(data:dict,mkey:str)->dict:
     return data
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  STATISK KALENDER-HTML (resultater + frivillig vagtplan)
+#  STATISK HTML-KALENDER (resultater + frivillig vagtplan)
 # ══════════════════════════════════════════════════════════════════════════════
 def _html_thead()->str:
     cells="".join(
@@ -237,7 +221,8 @@ def cal_html_resultater(mkey:str,shifts:dict,open_days:list,closed_days:list,
         rows+="<tr>"
         for i,day in enumerate(week):
             if day==0:
-                rows+='<td style="background:#fafafa;border:1px solid #ececec;padding:6px;min-width:100px"></td>'
+                rows+=('<td style="background:#fafafa;border:1px solid #ececec;'
+                       'padding:6px;min-width:100px"></td>')
                 continue
             d_str=date(y,m,day).isoformat()
             is_vdag=i in VAGTDAG_IDX
@@ -278,7 +263,7 @@ def cal_html_resultater(mkey:str,shifts:dict,open_days:list,closed_days:list,
             +_html_thead()+f"<tbody>{rows}</tbody></table></div>")
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  INTERAKTIV SETUP-KALENDER (admin)
+#  INTERAKTIV SETUP-KALENDER
 # ══════════════════════════════════════════════════════════════════════════════
 def render_setup_kalender(mkey:str)->dict:
     y,m=int(mkey[:4]),int(mkey[5:7])
@@ -290,18 +275,6 @@ def render_setup_kalender(mkey:str)->dict:
         else:
             st.session_state[sk]=default_date_types(y,m)
 
-    # Pre-build CSS for all cells
-    cell_css={}
-    for week in calendar.monthcalendar(y,m):
-        for i,day in enumerate(week):
-            if day==0: continue
-            d_str=date(y,m,day).isoformat()
-            state=st.session_state[sk].get(d_str,CLOSED)
-            bg,bo,tc=SETUP_STYLE[state][:3]
-            cid=f"cal-sc-{d_str.replace('-','')}"
-            cell_css[cid]=(bg,bo,tc)
-    _cal_css(cell_css)
-
     _dag_header("#2e7d32","#2e7d32")
 
     for week in calendar.monthcalendar(y,m):
@@ -309,21 +282,22 @@ def render_setup_kalender(mkey:str)->dict:
         for i,day in enumerate(week):
             with cols[i]:
                 if day==0:
-                    st.markdown('<div style="height:90px"></div>',unsafe_allow_html=True); continue
+                    _empty_cell(); continue
                 d_str=date(y,m,day).isoformat()
                 state=st.session_state[sk].get(d_str,CLOSED)
-                _,_,_,icon,label=SETUP_STYLE[state]
+                bg,border,text,icon,label=SETUP_STYLE[state]
                 next_s=SETUP_CYCLE[state]
-                cid=f"cal-sc-{d_str.replace('-','')}"
-                _anchor(cid)
-                btn_lbl=f"{icon} {DAG_LANG[i][:3]}\n{day}. {MÅN_GEN[m][:3]}\n{label}"
-                if st.button(btn_lbl,key=f"sc_{mkey}_{d_str}",use_container_width=True):
+                _,_,_,n_icon,n_label=SETUP_STYLE[next_s]
+                _colored_cell(bg,border,text,DAG_LANG[i][:3],day,MÅN_GEN[m][:3],
+                               f"{icon} {label}")
+                if st.button(f"→ {n_icon} {n_label}",
+                             key=f"sc_{mkey}_{d_str}",use_container_width=True):
                     st.session_state[sk][d_str]=next_s; st.rerun()
 
     return dict(st.session_state[sk])
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  INTERAKTIV PRÆFERENCE-KALENDER (frivillig)
+#  INTERAKTIV PRÆFERENCE-KALENDER
 # ══════════════════════════════════════════════════════════════════════════════
 def render_pref_kalender(mkey:str,vid:str,date_types:dict,existing:dict)->dict:
     y,m=int(mkey[:4]),int(mkey[5:7])
@@ -333,21 +307,6 @@ def render_pref_kalender(mkey:str,vid:str,date_types:dict,existing:dict)->dict:
 
     rel_set={d for d,t in date_types.items() if t in (OPEN,ACTIVITY)}
 
-    # Pre-build CSS
-    cell_css={}
-    for week in calendar.monthcalendar(y,m):
-        for i,day in enumerate(week):
-            if day==0: continue
-            d_str=date(y,m,day).isoformat()
-            is_vdag=i in VAGTDAG_IDX
-            is_rel =d_str in rel_set
-            if is_vdag and is_rel:
-                state=st.session_state[sk].get(d_str,"")
-                bg,bo,tc=PREF_STYLE[state][:3]
-                cid=f"cal-vp-{d_str.replace('-','')}"
-                cell_css[cid]=(bg,bo,tc)
-    _cal_css(cell_css)
-
     _dag_header("#1565c0","#1565c0")
 
     for week in calendar.monthcalendar(y,m):
@@ -355,39 +314,27 @@ def render_pref_kalender(mkey:str,vid:str,date_types:dict,existing:dict)->dict:
         for i,day in enumerate(week):
             with cols[i]:
                 if day==0:
-                    st.markdown('<div style="height:90px"></div>',unsafe_allow_html=True); continue
-                d_str=date(y,m,day).isoformat()
+                    _empty_cell(); continue
+                d_str  =date(y,m,day).isoformat()
                 is_vdag=i in VAGTDAG_IDX
                 is_rel =d_str in rel_set
-                is_closed=date_types.get(d_str)==CLOSED
+                is_cl  =date_types.get(d_str)==CLOSED
 
                 if is_vdag and is_rel:
                     state=st.session_state[sk].get(d_str,"")
-                    _,_,_,icon,label=PREF_STYLE[state]
-                    cid=f"cal-vp-{d_str.replace('-','')}"
-                    _anchor(cid)
-                    btn_lbl=f"{icon} {DAG_LANG[i][:3]}\n{day}. {MÅN_GEN[m][:3]}\n{label}"
-                    if st.button(btn_lbl,key=f"vp_{mkey}_{vid}_{d_str}",use_container_width=True):
-                        st.session_state[sk][d_str]=PREF_CYCLE[state]; st.rerun()
-                elif is_vdag and is_closed:
-                    # Lukket dag – grayed out, ikke klikbar
-                    st.markdown(
-                        f'<div style="background:#f0f0f0;border:1px dashed #ccc;'
-                        f'border-radius:12px;min-height:82px;padding:10px 4px;'
-                        f'text-align:center;color:#bbb">'
-                        f'<div style="font-size:10px;font-weight:700">{DAG_LANG[i][:3]}</div>'
-                        f'<div style="font-size:20px;font-weight:900">{day}</div>'
-                        f'<div style="font-size:9px">{MÅN_GEN[m][:3]}</div>'
-                        f'<div style="font-size:10px">🔴 Lukket</div></div>',
-                        unsafe_allow_html=True)
+                    bg,border,text,icon,label=PREF_STYLE[state]
+                    next_s=PREF_CYCLE[state]
+                    _,_,_,n_icon,n_label=PREF_STYLE[next_s]
+                    _colored_cell(bg,border,text,DAG_LANG[i][:3],day,MÅN_GEN[m][:3],
+                                   f"{icon} {label}")
+                    if st.button(f"→ {n_icon} {n_label}",
+                                 key=f"vp_{mkey}_{vid}_{d_str}",use_container_width=True):
+                        st.session_state[sk][d_str]=next_s; st.rerun()
+                elif is_vdag and is_cl:
+                    _grey_cell(DAG_LANG[i][:3],day,MÅN_GEN[m][:3],"🔴 Lukket")
+                    st.markdown('<div style="height:31px"></div>',unsafe_allow_html=True)
                 else:
-                    # Ikke vagtdag
-                    st.markdown(
-                        f'<div style="text-align:center;color:#e0e0e0;'
-                        f'font-size:13px;padding:18px 0">'
-                        f'<div style="font-size:10px">{DAG_LANG[i][:3]}</div>'
-                        f'{day}</div>',
-                        unsafe_allow_html=True)
+                    _empty_cell()
 
     return dict(st.session_state[sk])
 
@@ -403,30 +350,21 @@ def render_pref_mobil(mkey:str,vid:str,date_types:dict,existing:dict)->dict:
     if not rel_dates:
         st.info("Ingen datoer at vælge endnu."); return dict(st.session_state[sk])
 
-    # CSS for mobile cells
-    cell_css={}
-    for d_str in rel_dates:
-        state=st.session_state[sk].get(d_str,"")
-        bg,bo,tc=PREF_STYLE[state][:3]
-        cid=f"cal-mob-{d_str.replace('-','')}"
-        cell_css[cid]=(bg,bo,tc)
-    _cal_css(cell_css)
-
-    # 3 kolonner
     for i in range(0,len(rel_dates),3):
         batch=rel_dates[i:i+3]
         cols=st.columns(3)
         for ci,d_str in enumerate(batch):
             d=date.fromisoformat(d_str)
             state=st.session_state[sk].get(d_str,"")
-            _,_,_,icon,label=PREF_STYLE[state]
-            cid=f"cal-mob-{d_str.replace('-','')}"
+            bg,border,text,icon,label=PREF_STYLE[state]
+            next_s=PREF_CYCLE[state]
+            _,_,_,n_icon,n_label=PREF_STYLE[next_s]
             with cols[ci]:
-                _anchor(cid)
-                btn_lbl=(f"{icon} {DAG_LANG[d.weekday()][:3]}\n"
-                         f"{d.day}. {MÅN_GEN[d.month][:3]}\n{label}")
-                if st.button(btn_lbl,key=f"mob_{mkey}_{vid}_{d_str}",use_container_width=True):
-                    st.session_state[sk][d_str]=PREF_CYCLE[state]; st.rerun()
+                _colored_cell(bg,border,text,DAG_LANG[d.weekday()][:3],
+                               d.day,MÅN_GEN[d.month][:3],f"{icon} {label}")
+                if st.button(f"→ {n_icon} {n_label}",
+                             key=f"mob_{mkey}_{vid}_{d_str}",use_container_width=True):
+                    st.session_state[sk][d_str]=next_s; st.rerun()
 
     return dict(st.session_state[sk])
 
@@ -456,7 +394,6 @@ def side_frivillig(data:dict):
         st.session_state.vol_id=None; st.rerun()
 
     vol=data["volunteers"][vid]
-    # Header med lidt margin
     st.markdown('<div style="margin-top:30px"></div>',unsafe_allow_html=True)
     col_h,col_b=st.columns([5,1])
     col_h.markdown(f"## 👋 Hej, {vol['name']}!")
@@ -488,16 +425,15 @@ def _vis_vagtplan(data:dict,vid:str,vol:dict,mkey:str):
     kraevet  =vol.get("required_shifts",2)
 
     c1,c2,c3=st.columns(3)
-    c1.metric("✅ Dine vagter",    f"{len(my_shifts)}/{kraevet}")
-    c2.metric("🟢 Åbningsdage",    len(asgn["open"]))
-    c3.metric("🔴 Lukkedage",      len(asgn["closed"]))
+    c1.metric("✅ Dine vagter",  f"{len(my_shifts)}/{kraevet}")
+    c2.metric("🟢 Åbningsdage", len(asgn["open"]))
+    c3.metric("🔴 Lukkedage",   len(asgn["closed"]))
 
     st.markdown("### 📅 Vagtplan")
     st.markdown(
         cal_html_resultater(mkey,asgn["shifts"],asgn["open"],asgn["closed"],
                              asgn.get("activity",[]),data["volunteers"],highlight_vid=vid),
         unsafe_allow_html=True)
-    st.markdown("")
     if my_shifts:
         st.markdown("---")
         st.markdown("**🗓️ Dine vagter:**")
@@ -521,7 +457,7 @@ def _vis_praeference(data:dict,vid:str,vol:dict,mkey:str):
     st.markdown(f"### ✏️ Vagtønsker – {mk_label(mkey)}")
     st.markdown(
         "Klik på en dato for at skifte:  \n"
-        "**✅ Grøn = Ja** &nbsp;|&nbsp; **🟡 Gul = Måske** &nbsp;|&nbsp; **⬜ Hvid = Ikke valgt**  \n"
+        "**✅ Grøn = Ja** &nbsp;|&nbsp; **🟡 Gul = Måske** &nbsp;|&nbsp; **⬜ = Ikke valgt**  \n"
         f"Lukkede dage er grå. Vælg mindst **{min_sel}** datoer. "
         f"Din kvote: **{vol.get('required_shifts',2)} vagter**.")
 
@@ -557,14 +493,13 @@ def _vis_praeference(data:dict,vid:str,vol:dict,mkey:str):
 #  ADMIN-SIDE
 # ══════════════════════════════════════════════════════════════════════════════
 def side_admin(data:dict):
-    # Mobiladvarsel (CSS-baseret)
     st.markdown(
         '<div style="display:none" id="mob-warn"></div>'
-        '<style>@media(max-width:720px){#mob-warn{'
-        'display:block!important;background:#fff3e0;border:2px solid #ff9800;'
-        'border-radius:10px;padding:16px;text-align:center;font-size:15px;'
-        'font-weight:600;color:#e65100;margin-bottom:12px}'
-        '#mob-admin{display:none!important}}'
+        '<style>@media(max-width:720px){'
+        '#mob-warn{display:block!important;background:#fff3e0;'
+        'border:2px solid #ff9800;border-radius:10px;padding:16px;'
+        'text-align:center;font-size:15px;font-weight:600;color:#e65100;'
+        'margin-bottom:12px}}'
         '</style>'
         '<div id="mob-warn">⚠️ Admin-panelet er kun tilgængeligt på desktop.</div>',
         unsafe_allow_html=True)
@@ -616,7 +551,7 @@ def _tab_frivillige(data:dict):
     if not data["volunteers"]:
         st.info("Ingen frivillige oprettet endnu."); return
 
-    h1,h2,h3,h4,h5=st.columns([3,1,1,1,1])
+    h1,h2,h3,h4,_=st.columns([3,1,1,1,1])
     h1.markdown("**Navn**"); h2.markdown("**Vgt/md.**")
     h3.markdown("**Aktiv**"); h4.markdown("**Akt.udv.**"); st.markdown("---")
 
@@ -629,17 +564,14 @@ def _tab_frivillige(data:dict):
         c1.markdown(f'**{vol["name"]}**{badge}',unsafe_allow_html=True)
         q=c2.number_input("",1,20,vol.get("required_shifts",2),
                           key=f"q_{vid}",label_visibility="collapsed")
-        a=c3.checkbox("",vol.get("active",True),
-                      key=f"a_{vid}",label_visibility="collapsed")
-        ak=c4.checkbox("",vol.get("aktivitetsudvalg",False),
-                       key=f"ak_{vid}",label_visibility="collapsed")
+        a=c3.checkbox("",vol.get("active",True),key=f"a_{vid}",label_visibility="collapsed")
+        ak=c4.checkbox("",vol.get("aktivitetsudvalg",False),key=f"ak_{vid}",label_visibility="collapsed")
         edits[vid]={"required_shifts":int(q),"active":a,"aktivitetsudvalg":ak}
         if c5.button("🗑️",key=f"del_{vid}",help=f"Slet {vol['name']}"):
             del data["volunteers"][vid]; save(data); st.rerun()
 
     st.markdown("")
-    if st.button("💾 Gem alle ændringer",type="primary",
-                 use_container_width=True,key="gem_alle"):
+    if st.button("💾 Gem alle ændringer",type="primary",use_container_width=True,key="gem_alle"):
         for vid,vals in edits.items():
             if vid in data["volunteers"]: data["volunteers"][vid].update(vals)
         save(data); st.success("✅ Alle ændringer gemt!")
@@ -686,8 +618,8 @@ def _tab_opstaetning(data:dict):
             st.session_state.confirm_revoke=mkey
         if st.session_state.confirm_revoke==mkey:
             st.error(
-                f"⚠️ **Advarsel!** Dette sletter **alle indsendte ønsker** og "
-                f"eventuelle tildelte vagter for **{MÅNEDER[mdr]} {år}**. Er du sikker?")
+                f"⚠️ **Advarsel!** Dette sletter alle indsendte ønsker og eventuelle "
+                f"tildelte vagter for **{MÅNEDER[mdr]} {år}**. Er du sikker?")
             ca,cb_=st.columns(2)
             if ca.button("✅ Ja, tilbagekald",type="primary",use_container_width=True,key="ja_revoke"):
                 data["monthly_config"][mkey]["released"]=False
@@ -699,29 +631,25 @@ def _tab_opstaetning(data:dict):
                 st.session_state.confirm_revoke=None; st.rerun()
         return
 
-    # Initialiser session state
     sk=f"sc_{mkey}"
     if sk not in st.session_state:
         if "date_types" in cfg: st.session_state[sk]=dict(cfg["date_types"])
         else: st.session_state[sk]=default_date_types(år,mdr)
 
     st.markdown(
-        "**Klik på en dato for at skifte type:**  \n"
+        "**Klik på pilen under en dato for at skifte type:**  \n"
         "🟢 **Åben** → 🔴 **Lukket** → 🔵 **Aktivitet** → 🟢 ...  \n"
-        "*(Man/Tirs/Ons/Søn er åbne som standard, Tor/Fre/Lør er lukkede)*")
+        "*(Man/Tirs/Ons/Søn er åbne som standard)*")
     st.markdown("")
 
     selected=render_setup_kalender(mkey)
 
     st.markdown("---")
     c3,c4,c5=st.columns(3)
-    # VIGTIGT: Standard min=3, max=4, min_sel=5
-    min_per=c3.number_input("👤 Min. frivillige/vagt",1,10,
-                             cfg.get("min_per_shift",3),key="min_per")
-    max_per=c4.number_input("👥 Max. frivillige/vagt",1,20,
-                             cfg.get("max_per_shift",4),key="max_per")
-    min_sel=c5.number_input("☑️ Min. ønsker/frivillig",1,20,
-                             cfg.get("min_selections",5),key="min_sel")
+    # Standard: min=3, max=3, min_sel=5
+    min_per=c3.number_input("👤 Min. frivillige/vagt",1,10,cfg.get("min_per_shift",3),key="min_per")
+    max_per=c4.number_input("👥 Max. frivillige/vagt",1,20,cfg.get("max_per_shift",3),key="max_per")
+    min_sel=c5.number_input("☑️ Min. ønsker/frivillig",1,20,cfg.get("min_selections",5),key="min_sel")
 
     st.markdown("")
     cs,cr=st.columns(2)
@@ -809,15 +737,13 @@ def _tab_tildeling(data:dict):
                 data=auto_assign(data,mkey); save(data)
                 st.success("🎉 Vagter er tildelt!"); st.balloons(); st.rerun()
 
-    # Fail-safe eksport
     st.markdown("---")
-    with st.expander("🛡️ Fail-safe: Download rådata for denne måned"):
+    with st.expander("🛡️ Fail-safe: Download rådata"):
         st.caption("Hent alle indsendte ønsker som CSV — uanset om vagter er tildelt.")
         if prefs_m:
             rows=["Frivillig,Dato,Dag,Ønske"]
-            vols=data["volunteers"]
             for vid,prefs in prefs_m.items():
-                navn=vols.get(vid,{}).get("name",vid)
+                navn=data["volunteers"].get(vid,{}).get("name",vid)
                 for d_str,val in sorted(prefs.items()):
                     rows.append(f"{navn},{d_str},{DAG_LANG[date.fromisoformat(d_str).weekday()]},{val}")
             st.download_button("⬇️ Download ønsker (CSV)",
