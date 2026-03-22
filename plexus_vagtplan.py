@@ -20,7 +20,6 @@ MÅN_GEN   = ["","januar","februar","marts","april","maj","juni",
              "juli","august","september","oktober","november","december"]
 
 OPEN="open"; CLOSED="closed"; ACTIVITY="activity"
-# ── Ny rækkefølge: Åben → Aktivitet → Lukket ──────────────────────────────────
 SETUP_CYCLE = {OPEN:ACTIVITY, ACTIVITY:CLOSED, CLOSED:OPEN}
 SETUP_STYLE = {
     OPEN:     ("#c8e6c9","#43a047","#1b5e20","🟢","Åben"),
@@ -66,9 +65,18 @@ def save(data:dict):
 
 def mk(y,m)->str: return f"{y}-{m:02d}"
 def mk_label(k)->str: y,m=k.split("-"); return f"{MÅNEDER[int(m)]} {y}"
+
 def full_dato(d_str:str)->str:
     d=date.fromisoformat(d_str)
     return f"{DAG_LANG[d.weekday()]} den {d.day}. {MÅN_GEN[d.month]}"
+
+def fmt_dansk(d:date)->str:
+    """Dansk datoformat: dd-mm-yyyy med dansk måned i tekst."""
+    return f"{d.day:02d}-{d.month:02d}-{d.year}"
+
+def fmt_dansk_lang(d:date)->str:
+    """Dansk langt format: 5. marts 2025."""
+    return f"{d.day}. {MÅN_GEN[d.month]} {d.year}"
 
 def default_date_types(y:int,m:int)->dict:
     n=calendar.monthrange(y,m)[1]
@@ -81,17 +89,33 @@ def get_date_types(cfg:dict,y:int,m:int)->dict:
     return {d:OPEN for d in cfg.get("dates",[])}
 
 def default_deadline(y:int,m:int)->date:
-    """5 dage før den første i måneden."""
-    first=date(y,m,1)
-    return first-timedelta(days=5)
+    """Standard: 3 dage før månedens sidste dag."""
+    last=calendar.monthrange(y,m)[1]
+    return date(y,m,last)-timedelta(days=3)
 
 def next_plan_month(data:dict)->tuple:
+    """Måneden efter den seneste tildelte — bruges i Vagttildeling-tab."""
     assigned=sorted(data.get("assignments",{}).keys())
     if assigned:
         y,m=int(assigned[-1][:4]),int(assigned[-1][5:7])
     else:
         now=datetime.now(); y,m=now.year,now.month
     return (y+1,1) if m==12 else (y,m+1)
+
+def default_setup_month(data:dict)->tuple:
+    """
+    Standard for Måneds-opsætning:
+    Indeværende måned — medmindre den er frigivet, så næstkommende ikke-frigivne.
+    """
+    now=datetime.now()
+    y,m=now.year,now.month
+    for _ in range(24):
+        mkey=mk(y,m)
+        if not data["monthly_config"].get(mkey,{}).get("released",False):
+            return y,m
+        m+=1
+        if m>12: m=1; y+=1
+    return now.year,now.month
 
 # ── Kalender-hjælpere ─────────────────────────────────────────────────────────
 def _dag_header(border_color:str,text_color:str):
@@ -117,7 +141,8 @@ def _colored_cell(bg,border,text,dag,day,maan,status):
         f'<div style="font-size:11px;font-weight:600;color:{text};margin-top:3px">{status}</div>'
         f'</div>',unsafe_allow_html=True)
 
-def _grey_cell(dag,day,maan,label=""):
+def _grey_cell_nobutton(dag,day,maan,label=""):
+    """Grå celle UDEN knap — vises i fuld kalender for ikke-valgbare dage."""
     st.markdown(
         f'<div style="background:#f0f0f0;border:1px dashed #ccc;'
         f'border-radius:10px;padding:8px 4px 6px;text-align:center;'
@@ -128,21 +153,30 @@ def _grey_cell(dag,day,maan,label=""):
         f'<div style="font-size:11px;margin-top:3px">{label}</div>'
         f'</div>',unsafe_allow_html=True)
 
+def _non_vagtdag_cell(day):
+    """Meget lys celle for dage der ikke er vagtdage (Tor/Fre/Lør)."""
+    st.markdown(
+        f'<div style="background:#fafafa;border:1px solid #f0f0f0;'
+        f'border-radius:10px;padding:8px 4px 6px;text-align:center;'
+        f'min-height:84px;color:#ddd">'
+        f'<div style="font-size:26px;font-weight:900;line-height:1.1">{day}</div>'
+        f'</div>',unsafe_allow_html=True)
+
 def _empty_cell():
     st.markdown('<div style="min-height:110px"></div>',unsafe_allow_html=True)
 
 # ── Fordelingsalgoritme ───────────────────────────────────────────────────────
 def auto_assign(data:dict,mkey:str)->dict:
-    cfg        = data["monthly_config"].get(mkey,{})
-    y,m        = int(mkey[:4]),int(mkey[5:7])
-    dt         = get_date_types(cfg,y,m)
-    active_d   = [d for d,t in dt.items() if t in (OPEN,ACTIVITY)]
-    min_per    = cfg.get("min_per_shift",3)
-    max_per    = cfg.get("max_per_shift",3)
-    prefs_m    = data["preferences"].get(mkey,{})
-    vols       = data["volunteers"]
-    active     = [vid for vid,v in vols.items() if v.get("active",True)]
-    is_akt     = {vid:vols[vid].get("aktivitetsudvalg",False) for vid in active}
+    cfg      = data["monthly_config"].get(mkey,{})
+    y,m      = int(mkey[:4]),int(mkey[5:7])
+    dt       = get_date_types(cfg,y,m)
+    active_d = [d for d,t in dt.items() if t in (OPEN,ACTIVITY)]
+    min_per  = cfg.get("min_per_shift",3)
+    max_per  = cfg.get("max_per_shift",3)
+    prefs_m  = data["preferences"].get(mkey,{})
+    vols     = data["volunteers"]
+    active   = [vid for vid,v in vols.items() if v.get("active",True)]
+    is_akt   = {vid:vols[vid].get("aktivitetsudvalg",False) for vid in active}
 
     prio={vid:{d:(2 if prefs_m.get(vid,{}).get(d)=="sikker"
                   else 1 if prefs_m.get(vid,{}).get(d)=="måske" else 0)
@@ -189,8 +223,7 @@ def auto_assign(data:dict,mkey:str)->dict:
             shifts[cands[0]].append(vid); remaining[vid]-=1; vol_open[vid]+=1
             any_assigned=True; break
 
-    # Aktivitetsdage tæller som åbne hvis de er tilstrækkeligt bemandet
-    open_d    =[d for d in active_d if len(shifts[d])>=min_per]   # inkl. aktivitet
+    open_d    =[d for d in active_d if len(shifts[d])>=min_per]
     closed_d  =[d for d in active_d if len(shifts[d])<min_per]+[d for d,t in dt.items() if t==CLOSED]
     activity_d=[d for d in active_d if dt.get(d)==ACTIVITY and len(shifts[d])>=min_per]
 
@@ -215,8 +248,7 @@ def _html_thead()->str:
         for i in range(7))
     return f"<thead><tr>{cells}</tr></thead>"
 
-def cal_html_resultater(mkey:str,shifts:dict,open_days:list,closed_days:list,
-                         activity_days:list,vols:dict,highlight_vid:str=None)->str:
+def cal_html_resultater(mkey,shifts,open_days,closed_days,activity_days,vols,highlight_vid=None):
     y,m=int(mkey[:4]),int(mkey[5:7])
     rows=""
     for week in calendar.monthcalendar(y,m):
@@ -232,7 +264,6 @@ def cal_html_resultater(mkey:str,shifts:dict,open_days:list,closed_days:list,
                 is_open=d_str in open_days
                 is_act =d_str in activity_days
                 navne  =[(v,vols[v]["name"]) for v in shifts.get(d_str,[]) if v in vols]
-                # Aktivitetsdage er åbne — vises blå, men stadig tællt som åben
                 if is_act:
                     bg,hdr,dot="#dbeafe","#0d47a1","🔵"
                 elif is_open:
@@ -249,8 +280,7 @@ def cal_html_resultater(mkey:str,shifts:dict,open_days:list,closed_days:list,
                     for vid,name in navne)
                 rows+=(f'<td style="background:{bg};border:1px solid #ccc;'
                        f'padding:8px 5px;vertical-align:top;min-width:100px">'
-                       f'<div style="font-size:10px;font-weight:700;color:{hdr}">'
-                       f'{DAG_LANG[i]}</div>'
+                       f'<div style="font-size:10px;font-weight:700;color:{hdr}">{DAG_LANG[i]}</div>'
                        f'<div style="font-size:22px;font-weight:900;color:{hdr};line-height:1">{day}</div>'
                        f'<div style="font-size:9px;color:{hdr};margin-bottom:2px">{MÅN_GEN[m]}</div>'
                        f'<div style="font-size:10px;color:{hdr}">{dot}</div>'
@@ -273,10 +303,8 @@ def render_setup_kalender(mkey:str)->dict:
     sk=f"sc_{mkey}"
     if sk not in st.session_state:
         cfg=st.session_state.get(f"cfg_{mkey}",{})
-        if "date_types" in cfg:
-            st.session_state[sk]=dict(cfg["date_types"])
-        else:
-            st.session_state[sk]=default_date_types(y,m)
+        st.session_state[sk]=(dict(cfg["date_types"]) if "date_types" in cfg
+                               else default_date_types(y,m))
 
     _dag_header("#2e7d32","#2e7d32")
     for week in calendar.monthcalendar(y,m):
@@ -294,7 +322,16 @@ def render_setup_kalender(mkey:str)->dict:
                     st.session_state[sk][d_str]=next_s; st.rerun()
     return dict(st.session_state[sk])
 
+
 def render_pref_kalender(mkey:str,vid:str,date_types:dict,existing:dict)->dict:
+    """
+    Desktop præference-kalender.
+    Alle dage vises i samme grid:
+    - Valgbare dage (åbne/aktivitet): farvet celle + skiftknap
+    - Lukkede vagtdage:              grå celle, ingen knap
+    - Ikke-vagtdage (Tor/Fre/Lør):  meget lys celle, ingen knap
+    - Tomme ugepositioner:           tom plads
+    """
     y,m=int(mkey[:4]),int(mkey[5:7])
     sk=f"vp_{mkey}_{vid}"
     if sk not in st.session_state:
@@ -311,28 +348,40 @@ def render_pref_kalender(mkey:str,vid:str,date_types:dict,existing:dict)->dict:
                 is_vdag=i in VAGTDAG_IDX
                 is_rel =d_str in rel_set
                 is_cl  =date_types.get(d_str)==CLOSED
+
                 if is_vdag and is_rel:
+                    # Valgbar dag
                     state=st.session_state[sk].get(d_str,"")
                     bg,border,text,icon,label=PREF_STYLE[state]
                     next_s=PREF_CYCLE[state]
                     _,_,_,n_icon,n_label=PREF_STYLE[next_s]
-                    _colored_cell(bg,border,text,DAG_LANG[i][:3],day,MÅN_GEN[m][:3],f"{icon} {label}")
-                    if st.button(f"→ {n_icon} {n_label}",key=f"vp_{mkey}_{vid}_{d_str}",use_container_width=True):
+                    _colored_cell(bg,border,text,DAG_LANG[i][:3],day,MÅN_GEN[m][:3],
+                                   f"{icon} {label}")
+                    if st.button(f"→ {n_icon} {n_label}",
+                                 key=f"vp_{mkey}_{vid}_{d_str}",use_container_width=True):
                         st.session_state[sk][d_str]=next_s; st.rerun()
                 elif is_vdag and is_cl:
-                    _grey_cell(DAG_LANG[i][:3],day,MÅN_GEN[m][:3],"🔴 Lukket")
+                    # Lukket vagtdag — grå, ingen knap
+                    _grey_cell_nobutton(DAG_LANG[i][:3],day,MÅN_GEN[m][:3],"🔴 Lukket")
+                    # Tom plads svarende til knappens højde
                     st.markdown('<div style="height:31px"></div>',unsafe_allow_html=True)
-                else:
-                    _empty_cell()
+                elif not is_vdag:
+                    # Ikke vagtdag (Tor/Fre/Lør) — meget lys, ingen knap
+                    _non_vagtdag_cell(day)
+                    st.markdown('<div style="height:31px"></div>',unsafe_allow_html=True)
+
     return dict(st.session_state[sk])
 
+
 def render_pref_mobil(mkey:str,vid:str,date_types:dict,existing:dict)->dict:
+    """Mobilvenlig: kun valgbare datoer, 3 kolonner."""
     sk=f"vp_{mkey}_{vid}"
     if sk not in st.session_state:
         st.session_state[sk]=dict(existing)
     rel_dates=sorted(d for d,t in date_types.items() if t in (OPEN,ACTIVITY))
     if not rel_dates:
         st.info("Ingen datoer at vælge endnu."); return dict(st.session_state[sk])
+
     for i in range(0,len(rel_dates),3):
         batch=rel_dates[i:i+3]
         cols=st.columns(3)
@@ -345,7 +394,8 @@ def render_pref_mobil(mkey:str,vid:str,date_types:dict,existing:dict)->dict:
             with cols[ci]:
                 _colored_cell(bg,border,text,DAG_LANG[d.weekday()][:3],
                                d.day,MÅN_GEN[d.month][:3],f"{icon} {label}")
-                if st.button(f"→ {n_icon} {n_label}",key=f"mob_{mkey}_{vid}_{d_str}",use_container_width=True):
+                if st.button(f"→ {n_icon} {n_label}",
+                             key=f"mob_{mkey}_{vid}_{d_str}",use_container_width=True):
                     st.session_state[sk][d_str]=next_s; st.rerun()
     return dict(st.session_state[sk])
 
@@ -397,19 +447,19 @@ def side_frivillig(data:dict):
     else:
         st.info("Denne måned er ikke frigivet endnu.")
 
+
 def _vis_vagtplan(data:dict,vid:str,vol:dict,mkey:str):
     asgn     =data["assignments"][mkey]
     my_shifts=sorted(d for d,vs in asgn["shifts"].items() if vid in vs)
     kraevet  =vol.get("required_shifts",2)
-    åbne     =len(asgn["open"])   # inkl. aktivitetsdage
+    åbne     =len(asgn["open"])
     aktivit  =len(asgn.get("activity",[]))
     lukkede  =len(asgn["closed"])
 
     c1,c2,c3=st.columns(3)
     c1.metric("✅ Dine vagter", f"{len(my_shifts)}/{kraevet}")
     c2.metric("🟢 Åbningsdage", åbne,
-              delta=f"heraf {aktivit} aktivitet" if aktivit else None,
-              delta_color="off")
+              delta=f"heraf {aktivit} aktivitet" if aktivit else None, delta_color="off")
     c3.metric("🔴 Lukkedage",   lukkede)
 
     st.markdown("### 📅 Vagtplan")
@@ -428,6 +478,7 @@ def _vis_vagtplan(data:dict,vid:str,vol:dict,mkey:str):
     if len(my_shifts)<kraevet:
         st.warning(f"⚠️ Du fik {kraevet-len(my_shifts)} færre vagt(er) end aftalt.")
 
+
 def _vis_praeference(data:dict,vid:str,vol:dict,mkey:str):
     cfg     =data["monthly_config"][mkey]
     y,m     =int(mkey[:4]),int(mkey[5:7])
@@ -441,19 +492,19 @@ def _vis_praeference(data:dict,vid:str,vol:dict,mkey:str):
 
     st.markdown(f"### ✏️ Vagtønsker – {mk_label(mkey)}")
 
-    # Vis deadline hvis sat
+    # Deadline-banner med dansk format
     if deadline:
         try:
             dl=date.fromisoformat(deadline)
-            dage_tilbage=(dl-date.today()).days
-            if dage_tilbage>0:
-                st.info(f"📅 **Indsendelsesdeadline: {dl.strftime('%d. %B %Y')}** "
-                        f"— {dage_tilbage} dag(e) tilbage")
-            elif dage_tilbage==0:
-                st.warning(f"⏰ **Deadline er i dag: {dl.strftime('%d. %B %Y')}!**")
+            dage=(dl-date.today()).days
+            dl_tekst=fmt_dansk_lang(dl)           # fx "28. marts 2025"
+            dl_kort =fmt_dansk(dl)                 # fx "28-03-2025"
+            if dage>0:
+                st.info(f"📅 **Deadline for indsendelse: {dl_tekst}** ({dl_kort}) — {dage} dag(e) tilbage")
+            elif dage==0:
+                st.warning(f"⏰ **Deadline er i dag: {dl_tekst}** ({dl_kort}) — send dine ønsker nu!")
             else:
-                st.error(f"⌛ Deadline var {dl.strftime('%d. %B %Y')} "
-                         f"({-dage_tilbage} dag(e) siden).")
+                st.error(f"⌛ Deadline var {dl_tekst} ({dl_kort}) — {-dage} dag(e) siden.")
         except Exception:
             pass
 
@@ -586,7 +637,9 @@ def _tab_frivillige(data:dict):
 # ── Tab: Måneds-opsætning ──────────────────────────────────────────────────────
 def _tab_opstaetning(data:dict):
     st.markdown("### 📅 Måneds-opsætning")
-    ny,nm=next_plan_month(data)
+
+    # Standard: indeværende måned, eller næstkommende ikke-frigivne
+    ny,nm=default_setup_month(data)
     c1,c2=st.columns(2)
     år =int(c1.number_input("År",2024,2030,ny,key="setup_ar"))
     mdr=int(c2.selectbox("Måned",range(1,13),index=nm-1,
@@ -610,7 +663,8 @@ def _tab_opstaetning(data:dict):
                   delta=f"heraf {n_act} aktivitet" if n_act else None,delta_color="off")
         c2.metric("🔴 Lukkede dage",n_closed)
         if cfg.get("deadline"):
-            c3.metric("📅 Deadline",date.fromisoformat(cfg["deadline"]).strftime("%d/%m/%Y"))
+            dl=date.fromisoformat(cfg["deadline"])
+            c3.metric("📅 Deadline",fmt_dansk(dl))
         prefs_m=data["preferences"].get(mkey,{})
         aktive=sum(1 for v in data["volunteers"].values() if v.get("active",True))
         st.info(f"📊 **{len(prefs_m)}/{aktive}** aktive frivillige har indsendt ønsker.")
@@ -633,7 +687,6 @@ def _tab_opstaetning(data:dict):
                 st.session_state.confirm_revoke=None; st.rerun()
         return
 
-    # Kalender-opsætning
     sk=f"sc_{mkey}"
     if sk not in st.session_state:
         if "date_types" in cfg: st.session_state[sk]=dict(cfg["date_types"])
@@ -652,9 +705,9 @@ def _tab_opstaetning(data:dict):
     max_per=c4.number_input("👥 Max. frivillige/vagt",1,20,cfg.get("max_per_shift",3),key="max_per")
     min_sel=c5.number_input("☑️ Min. ønsker/frivillig",1,20,cfg.get("min_selections",5),key="min_sel")
 
-    # ── Deadline-vælger ────────────────────────────────────────────────────────
+    # Deadline
     st.markdown("---")
-    st.markdown("**📅 Seneste rettidige indsendelse (SU / deadline)**")
+    st.markdown("**📅 Seneste rettidige indsendelse (deadline)**")
     default_dl=default_deadline(år,mdr)
     existing_dl=date.fromisoformat(cfg["deadline"]) if cfg.get("deadline") else default_dl
     deadline_val=st.date_input(
@@ -663,8 +716,11 @@ def _tab_opstaetning(data:dict):
         min_value=date(år-1,1,1),
         max_value=date(år,mdr,calendar.monthrange(år,mdr)[1]),
         key="deadline_input",
+        format="DD-MM-YYYY",
         help="Vises til de frivillige som en påmindelse. Påvirker ikke systemet automatisk.")
-    st.caption(f"Standard er 5 dage før månedens start ({default_dl.strftime('%d. %B %Y')})")
+    st.caption(
+        f"Standard er 3 dage før månedens sidste dag "
+        f"({fmt_dansk_lang(default_dl)}, dvs. {fmt_dansk(default_dl)})")
 
     st.markdown("")
     cs,cr=st.columns(2)
@@ -783,7 +839,7 @@ def _tab_resultater(data:dict):
     vols=data["volunteers"]
     st.caption(f"⏱️ Genereret: {asgn.get('generated_at','–')}")
 
-    åbne   =len(asgn["open"])       # inkl. aktivitetsdage
+    åbne   =len(asgn["open"])
     aktivit=len(asgn.get("activity",[]))
     lukkede=len(asgn["closed"])
     total  =åbne+lukkede
@@ -791,8 +847,7 @@ def _tab_resultater(data:dict):
 
     c1,c2,c3=st.columns(3)
     c1.metric("🟢 Åbningsdage", åbne,
-              delta=f"heraf {aktivit} aktivitet" if aktivit else None,
-              delta_color="off")
+              delta=f"heraf {aktivit} aktivitet" if aktivit else None, delta_color="off")
     c2.metric("🔴 Lukkedage",   lukkede)
     c3.metric("📈 Åbningspct.", f"{pct}%")
 
