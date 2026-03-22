@@ -547,22 +547,28 @@ def _html_thead() -> str:
 
 
 def cal_html_resultater(mkey, shifts, open_days, closed_days, activity_days,
-                        vols, highlight_vid=None, volunteer_view=False):
+                        vols, highlight_vid=None, volunteer_view=False,
+                        configured_open=None):
     """
     Rendrer HTML-kalender med vagttildelinger.
 
-    volunteer_view=True: Lukkedage viser IKKE navnelisten — frivillige kan ikke
-    se hvem der har vagt på en dag med for få frivillige (da den lukker).
-    Admin ser altid alle navne på alle dage.
+    Tre typer dage vises forskelligt:
+      🟢/🔵  Åbningsdag    — nok frivillige (grøn/blå)
+      🔴     For få        — planlagt åben, men ikke nok frivillige (rød)
+      ⬜     Planlagt lukket — sat til CLOSED i opsætningen (neutral grå)
+
+    volunteer_view=True: "for få"-dage skjuler navnelisten.
+    configured_open: liste over dage der var sat til OPEN/ACTIVITY i opsætningen.
+                     Bruges til at skelne "planlagt lukket" fra "for få frivillige".
     """
     try:
         y, m = int(mkey[:4]), int(mkey[5:7])
     except (ValueError, AttributeError):
         return "<p>Ugyldig månednøgle.</p>"
 
-    open_set     = set(open_days)
-    activity_set = set(activity_days)
-    closed_set   = set(closed_days)
+    open_set          = set(open_days)
+    activity_set      = set(activity_days)
+    configured_set    = set(configured_open) if configured_open else None
 
     rows = ""
     for week in calendar.monthcalendar(y, m):
@@ -572,50 +578,84 @@ def cal_html_resultater(mkey, shifts, open_days, closed_days, activity_days,
                 rows += ('<td style="background:#fafafa;border:1px solid #ececec;'
                          'padding:6px;min-width:100px"></td>')
                 continue
-            d_str   = date(y, m, day).isoformat()
-            is_vdag = i in VAGTDAG_IDX
+            d_str = date(y, m, day).isoformat()
 
-            if is_vdag:
-                is_open = d_str in open_set
-                is_act  = d_str in activity_set
-                navne   = [(v, vols[v]["name"]) for v in shifts.get(d_str, []) if v in vols]
+            # Bestem dagtype ud fra assignments-data (ikke ugedag)
+            is_open   = d_str in open_set
+            is_act    = d_str in activity_set
+            in_shifts = d_str in shifts   # havde tildelinger (åben eller for få)
 
+            # Er dagen overhovedet planlagt aktiv?
+            if configured_set is not None:
+                was_planned_open = d_str in configured_set
+            else:
+                # Fallback: hvis den har vagttildelinger eller er i open/closed
+                was_planned_open = in_shifts
+
+            if is_open:
+                # ── Åbningsdag ───────────────────────────────────────
                 if is_act:
-                    bg, hdr, dot = "#dbeafe", "#0d47a1", "🔵"
-                elif is_open:
-                    bg, hdr, dot = "#e8f5e9", "#1b5e20", "🟢"
+                    bg, hdr, dot, status_txt = "#dbeafe", "#0d47a1", "🔵", "Aktivitet"
                 else:
-                    bg, hdr, dot = "#ffebee", "#b71c1c", "🔴"
+                    bg, hdr, dot, status_txt = "#e8f5e9", "#1b5e20", "🟢", "Åben"
 
-                # Frivillig-visning: lukkedage viser IKKE navne
-                if volunteer_view and not is_open:
-                    names_html = (
-                        '<div style="font-size:10px;color:#b71c1c;'
-                        'margin-top:4px;font-style:italic">Lukket</div>'
-                    )
-                else:
-                    names_html = "".join(
-                        f'<div style="font-size:11px;margin-top:2px;padding:1px 6px;'
-                        f'border-radius:4px;'
-                        f'background:{"#a5d6a7" if vid == highlight_vid else "#ffffffcc"};'
-                        f'color:{"#1b5e20" if vid == highlight_vid else "#333"};'
-                        f'font-weight:{"700" if vid == highlight_vid else "400"}">'
-                        f'{"★ " if vid == highlight_vid else ""}{name}</div>'
-                        for vid, name in navne
-                    )
-
+                navne = [(v, vols[v]["name"]) for v in shifts.get(d_str, []) if v in vols]
+                names_html = "".join(
+                    f'<div style="font-size:11px;margin-top:2px;padding:1px 6px;'
+                    f'border-radius:4px;'
+                    f'background:{"#a5d6a7" if vid == highlight_vid else "#ffffffcc"};'
+                    f'color:{"#1b5e20" if vid == highlight_vid else "#333"};'
+                    f'font-weight:{"700" if vid == highlight_vid else "400"}">'
+                    f'{"★ " if vid == highlight_vid else ""}{name}</div>'
+                    for vid, name in navne
+                )
                 rows += (f'<td style="background:{bg};border:1px solid #ccc;'
                          f'padding:8px 5px;vertical-align:top;min-width:100px">'
                          f'<div style="font-size:10px;font-weight:700;color:{hdr}">{DAG_LANG[i]}</div>'
                          f'<div style="font-size:22px;font-weight:900;color:{hdr};line-height:1">{day}</div>'
                          f'<div style="font-size:9px;color:{hdr};margin-bottom:2px">{MÅN_GEN[m]}</div>'
-                         f'<div style="font-size:10px;color:{hdr}">{dot}</div>'
+                         f'<div style="font-size:10px;color:{hdr}">{dot} {status_txt}</div>'
                          f'{names_html}</td>')
+
+            elif was_planned_open:
+                # ── For få frivillige (planlagt åben, men lukket) ────
+                bg, hdr = "#ffebee", "#c62828"
+                navne = [(v, vols[v]["name"]) for v in shifts.get(d_str, []) if v in vols]
+
+                if volunteer_view:
+                    # Frivillige ser ikke hvem der er tildelt på lukkede dage
+                    body_html = ('<div style="font-size:10px;color:#c62828;'
+                                 'margin-top:4px;font-style:italic">Lukket</div>')
+                else:
+                    # Admin ser tildelingerne (selv om dagen lukker)
+                    body_html = (
+                        '<div style="font-size:10px;color:#c62828;'
+                        'margin-top:2px;font-style:italic">For få frivillige</div>'
+                        + "".join(
+                            f'<div style="font-size:10px;margin-top:2px;padding:1px 5px;'
+                            f'border-radius:4px;background:#ffcdd2;color:#b71c1c">'
+                            f'{name}</div>'
+                            for _, name in navne
+                        )
+                    )
+                rows += (f'<td style="background:{bg};border:1px solid #ef9a9a;'
+                         f'padding:8px 5px;vertical-align:top;min-width:100px">'
+                         f'<div style="font-size:10px;font-weight:700;color:{hdr}">{DAG_LANG[i]}</div>'
+                         f'<div style="font-size:22px;font-weight:900;color:{hdr};line-height:1">{day}</div>'
+                         f'<div style="font-size:9px;color:{hdr};margin-bottom:2px">{MÅN_GEN[m]}</div>'
+                         f'<div style="font-size:10px;color:{hdr}">🔴</div>'
+                         f'{body_html}</td>')
+
             else:
-                rows += (f'<td style="background:#fafafa;border:1px solid #ececec;'
-                         f'padding:8px 4px;text-align:center;color:#ccc;vertical-align:top">'
-                         f'<div style="font-size:11px">{DAG_LANG[i]}</div>'
-                         f'<div style="font-size:16px">{day}</div></td>')
+                # ── Planlagt lukket (sat til CLOSED i opsætningen) ───
+                rows += (f'<td style="background:#f5f5f5;border:1px solid #e0e0e0;'
+                         f'padding:8px 5px;vertical-align:top;min-width:100px;opacity:0.6">'
+                         f'<div style="font-size:10px;font-weight:700;color:#9e9e9e">{DAG_LANG[i]}</div>'
+                         f'<div style="font-size:22px;font-weight:900;color:#bdbdbd;line-height:1">{day}</div>'
+                         f'<div style="font-size:9px;color:#bdbdbd;margin-bottom:2px">{MÅN_GEN[m]}</div>'
+                         f'<div style="font-size:10px;color:#bdbdbd">📅 Planlagt lukket</div>'
+                         f'</td>')
+
         rows += "</tr>"
 
     return (f'<div style="overflow-x:auto;border-radius:12px;border:1px solid #e0e0e0;overflow:hidden">'
@@ -666,10 +706,10 @@ def render_setup_kalender(mkey: str) -> dict:
 def render_pref_kalender(mkey: str, vid: str, date_types: dict, existing: dict) -> dict:
     """
     Desktop præference-kalender.
-    - Åbne/aktivitetsdage: farvet celle med klik
-    - Lukkede vagtdage: grå, ingen knap
-    - Ikke-vagtdage (Tor/Fre/Lør): meget lys, ingen knap
-    - Tomme ugepositioner: tom plads
+    Valgbarhed bestemmes KUN af opsætningens date_types — ikke ugedag.
+    - OPEN / ACTIVITY → klikbar, farvet celle
+    - CLOSED          → planlagt lukket, grå, ingen knap
+    - Ingen config    → tom/neutral celle
     """
     try:
         y, m = int(mkey[:4]), int(mkey[5:7])
@@ -683,7 +723,15 @@ def render_pref_kalender(mkey: str, vid: str, date_types: dict, existing: dict) 
     rel_set = {d for d, t in date_types.items() if t in (OPEN, ACTIVITY)}
 
     st.markdown(OVERLAY_CAL_CSS, unsafe_allow_html=True)
-    _dag_header("#1565c0", "#1565c0")
+    # Dag-header: vis alle 7 dage neutralt — enhver dag kan være åben i opsætningen
+    cols_h = st.columns(7)
+    for i in range(7):
+        cols_h[i].markdown(
+            f'<div style="text-align:center;font-size:11px;font-weight:700;'
+            f'padding:5px 0;letter-spacing:0.5px;text-transform:uppercase;'
+            f'border-bottom:3px solid #1565c0;color:#1565c0">'
+            f'{DAG_LANG[i][:3]}</div>', unsafe_allow_html=True)
+
     for week in calendar.monthcalendar(y, m):
         cols = st.columns(7)
         for i, day in enumerate(week):
@@ -692,11 +740,10 @@ def render_pref_kalender(mkey: str, vid: str, date_types: dict, existing: dict) 
                     _empty_cell()
                     continue
                 d_str   = date(y, m, day).isoformat()
-                is_vdag = i in VAGTDAG_IDX
-                is_rel  = d_str in rel_set
-                is_cl   = date_types.get(d_str) == CLOSED
+                cfg_typ = date_types.get(d_str)   # OPEN, CLOSED, ACTIVITY eller None
 
-                if is_vdag and is_rel:
+                if cfg_typ in (OPEN, ACTIVITY):
+                    # Valgbar dag — klik overalt på cellen
                     state = st.session_state[sk].get(d_str, "")
                     if state not in PREF_STYLE:
                         state = ""
@@ -709,10 +756,12 @@ def render_pref_kalender(mkey: str, vid: str, date_types: dict, existing: dict) 
                                  key=f"vp_{mkey}_{vid}_{d_str}", use_container_width=True):
                         st.session_state[sk][d_str] = next_s
                         st.rerun()
-                elif is_vdag and is_cl:
-                    _grey_cell_nobutton(DAG_LANG[i][:3], day, MÅN_GEN[m][:3], "🔴 Lukket")
-                elif not is_vdag:
-                    _non_vagtdag_cell(DAG_LANG[i][:3], day, MÅN_GEN[m][:3])
+                elif cfg_typ == CLOSED:
+                    # Planlagt lukket dag — grå, ingen knap
+                    _grey_cell_nobutton(DAG_LANG[i][:3], day, MÅN_GEN[m][:3], "📅 Planlagt lukket")
+                else:
+                    # Dag uden konfiguration (burde ikke ske) — neutral tom celle
+                    _empty_cell()
 
     return dict(st.session_state[sk])
 
@@ -857,7 +906,8 @@ def _vis_vagtplan(data: dict, vid: str, vol: dict, mkey: str):
     st.markdown(
         cal_html_resultater(
             mkey, shifts, open_days, closed_all, activity,
-            data["volunteers"], highlight_vid=vid, volunteer_view=True),
+            data["volunteers"], highlight_vid=vid, volunteer_view=True,
+            configured_open=asgn.get("configured_open")),
         unsafe_allow_html=True)
 
     if my_open_shifts:
@@ -1376,7 +1426,8 @@ def _tab_resultater(data: dict):
     # Admin-kalender: volunteer_view=False → navne vises på ALLE dage inkl. lukkedage
     st.markdown(
         cal_html_resultater(mkey, shifts, open_days, closed_for_cal, activity, vols,
-                            volunteer_view=False),
+                            volunteer_view=False,
+                            configured_open=asgn.get("configured_open")),
         unsafe_allow_html=True)
 
     with st.expander("👤 Oversigt per frivillig"):
