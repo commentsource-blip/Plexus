@@ -51,6 +51,32 @@ div[data-testid="stTabs"] button[data-baseweb="tab"]{
 </style>
 """
 
+# CSS til usynlig overlay-knap der dækker hele datocellen
+OVERLAY_CAL_CSS = """
+<style>
+div[data-testid="stMarkdownContainer"]:has(.cal-overlay-cell)
+  + div[data-testid="stButton"] {
+    margin-top: -110px !important;
+    height: 110px !important;
+    position: relative;
+    z-index: 10;
+}
+div[data-testid="stMarkdownContainer"]:has(.cal-overlay-cell)
+  + div[data-testid="stButton"] > button {
+    height: 110px !important;
+    width: 100% !important;
+    opacity: 0 !important;
+    cursor: pointer !important;
+    border: none !important;
+    background: transparent !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    display: block !important;
+    border-radius: 0 !important;
+}
+</style>
+"""
+
 # ── Data ──────────────────────────────────────────────────────────────────────
 def load() -> dict:
     if os.path.exists(DATA_FILE):
@@ -89,9 +115,8 @@ def get_date_types(cfg:dict,y:int,m:int)->dict:
     return {d:OPEN for d in cfg.get("dates",[])}
 
 def default_deadline(y:int,m:int)->date:
-    """Standard: 3 dage før månedens sidste dag."""
-    last=calendar.monthrange(y,m)[1]
-    return date(y,m,last)-timedelta(days=3)
+    """Standard: 3 dage inden måneden starter (dvs. 3 dage før den 1.)."""
+    return date(y,m,1)-timedelta(days=3)
 
 def next_plan_month(data:dict)->tuple:
     """Måneden efter den seneste tildelte — bruges i Vagttildeling-tab."""
@@ -129,10 +154,11 @@ def _dag_header(border_color:str,text_color:str):
             f'color:{text_color if is_vd else "#ccc"}">'
             f'{DAG_LANG[i][:3]}</div>',unsafe_allow_html=True)
 
-def _colored_cell(bg,border,text,dag,day,maan,status):
+def _colored_cell(bg,border,text,dag,day,maan,status,overlay=False):
+    cls=' class="cal-overlay-cell"' if overlay else ''
     st.markdown(
-        f'<div style="background:{bg};border:2px solid {border};'
-        f'border-radius:10px 10px 0 0;padding:8px 4px 6px;text-align:center;'
+        f'<div{cls} style="background:{bg};border:2px solid {border};'
+        f'border-radius:10px;padding:8px 4px 6px;text-align:center;'
         f'min-height:84px">'
         f'<div style="font-size:9px;font-weight:700;color:{text};'
         f'text-transform:uppercase;letter-spacing:0.4px">{dag}</div>'
@@ -153,13 +179,16 @@ def _grey_cell_nobutton(dag,day,maan,label=""):
         f'<div style="font-size:11px;margin-top:3px">{label}</div>'
         f'</div>',unsafe_allow_html=True)
 
-def _non_vagtdag_cell(day):
+def _non_vagtdag_cell(dag,day,maan):
     """Meget lys celle for dage der ikke er vagtdage (Tor/Fre/Lør)."""
     st.markdown(
         f'<div style="background:#fafafa;border:1px solid #f0f0f0;'
         f'border-radius:10px;padding:8px 4px 6px;text-align:center;'
         f'min-height:84px;color:#ddd">'
+        f'<div style="font-size:9px;font-weight:700;text-transform:uppercase;'
+        f'letter-spacing:0.4px">{dag}</div>'
         f'<div style="font-size:26px;font-weight:900;line-height:1.1">{day}</div>'
+        f'<div style="font-size:9px;opacity:0.8">{maan}</div>'
         f'</div>',unsafe_allow_html=True)
 
 def _empty_cell():
@@ -306,6 +335,7 @@ def render_setup_kalender(mkey:str)->dict:
         st.session_state[sk]=(dict(cfg["date_types"]) if "date_types" in cfg
                                else default_date_types(y,m))
 
+    st.markdown(OVERLAY_CAL_CSS,unsafe_allow_html=True)
     _dag_header("#2e7d32","#2e7d32")
     for week in calendar.monthcalendar(y,m):
         cols=st.columns(7)
@@ -316,9 +346,10 @@ def render_setup_kalender(mkey:str)->dict:
                 state=st.session_state[sk].get(d_str,CLOSED)
                 bg,border,text,icon,label=SETUP_STYLE[state]
                 next_s=SETUP_CYCLE[state]
-                _,_,_,n_icon,n_label=SETUP_STYLE[next_s]
-                _colored_cell(bg,border,text,DAG_LANG[i][:3],day,MÅN_GEN[m][:3],f"{icon} {label}")
-                if st.button(f"→ {n_icon} {n_label}",key=f"sc_{mkey}_{d_str}",use_container_width=True):
+                _colored_cell(bg,border,text,DAG_LANG[i][:3],day,MÅN_GEN[m][:3],
+                               f"{icon} {label}",overlay=True)
+                if st.button(f"→ {SETUP_STYLE[next_s][3]} {SETUP_STYLE[next_s][4]}",
+                             key=f"sc_{mkey}_{d_str}",use_container_width=True):
                     st.session_state[sk][d_str]=next_s; st.rerun()
     return dict(st.session_state[sk])
 
@@ -327,7 +358,7 @@ def render_pref_kalender(mkey:str,vid:str,date_types:dict,existing:dict)->dict:
     """
     Desktop præference-kalender.
     Alle dage vises i samme grid:
-    - Valgbare dage (åbne/aktivitet): farvet celle + skiftknap
+    - Valgbare dage (åbne/aktivitet): farvet celle, klik overalt for at skifte
     - Lukkede vagtdage:              grå celle, ingen knap
     - Ikke-vagtdage (Tor/Fre/Lør):  meget lys celle, ingen knap
     - Tomme ugepositioner:           tom plads
@@ -338,6 +369,7 @@ def render_pref_kalender(mkey:str,vid:str,date_types:dict,existing:dict)->dict:
         st.session_state[sk]=dict(existing)
     rel_set={d for d,t in date_types.items() if t in (OPEN,ACTIVITY)}
 
+    st.markdown(OVERLAY_CAL_CSS,unsafe_allow_html=True)
     _dag_header("#1565c0","#1565c0")
     for week in calendar.monthcalendar(y,m):
         cols=st.columns(7)
@@ -350,25 +382,22 @@ def render_pref_kalender(mkey:str,vid:str,date_types:dict,existing:dict)->dict:
                 is_cl  =date_types.get(d_str)==CLOSED
 
                 if is_vdag and is_rel:
-                    # Valgbar dag
+                    # Valgbar dag — klik overalt på cellen
                     state=st.session_state[sk].get(d_str,"")
                     bg,border,text,icon,label=PREF_STYLE[state]
                     next_s=PREF_CYCLE[state]
                     _,_,_,n_icon,n_label=PREF_STYLE[next_s]
                     _colored_cell(bg,border,text,DAG_LANG[i][:3],day,MÅN_GEN[m][:3],
-                                   f"{icon} {label}")
+                                   f"{icon} {label}",overlay=True)
                     if st.button(f"→ {n_icon} {n_label}",
                                  key=f"vp_{mkey}_{vid}_{d_str}",use_container_width=True):
                         st.session_state[sk][d_str]=next_s; st.rerun()
                 elif is_vdag and is_cl:
                     # Lukket vagtdag — grå, ingen knap
                     _grey_cell_nobutton(DAG_LANG[i][:3],day,MÅN_GEN[m][:3],"🔴 Lukket")
-                    # Tom plads svarende til knappens højde
-                    st.markdown('<div style="height:31px"></div>',unsafe_allow_html=True)
                 elif not is_vdag:
                     # Ikke vagtdag (Tor/Fre/Lør) — meget lys, ingen knap
-                    _non_vagtdag_cell(day)
-                    st.markdown('<div style="height:31px"></div>',unsafe_allow_html=True)
+                    _non_vagtdag_cell(DAG_LANG[i][:3],day,MÅN_GEN[m][:3])
 
     return dict(st.session_state[sk])
 
@@ -382,6 +411,7 @@ def render_pref_mobil(mkey:str,vid:str,date_types:dict,existing:dict)->dict:
     if not rel_dates:
         st.info("Ingen datoer at vælge endnu."); return dict(st.session_state[sk])
 
+    st.markdown(OVERLAY_CAL_CSS,unsafe_allow_html=True)
     for i in range(0,len(rel_dates),3):
         batch=rel_dates[i:i+3]
         cols=st.columns(3)
@@ -393,7 +423,7 @@ def render_pref_mobil(mkey:str,vid:str,date_types:dict,existing:dict)->dict:
             _,_,_,n_icon,n_label=PREF_STYLE[next_s]
             with cols[ci]:
                 _colored_cell(bg,border,text,DAG_LANG[d.weekday()][:3],
-                               d.day,MÅN_GEN[d.month][:3],f"{icon} {label}")
+                               d.day,MÅN_GEN[d.month][:3],f"{icon} {label}",overlay=True)
                 if st.button(f"→ {n_icon} {n_label}",
                              key=f"mob_{mkey}_{vid}_{d_str}",use_container_width=True):
                     st.session_state[sk][d_str]=next_s; st.rerun()
@@ -693,7 +723,7 @@ def _tab_opstaetning(data:dict):
         else: st.session_state[sk]=default_date_types(år,mdr)
 
     st.markdown(
-        "**Klik på pilen under en dato for at skifte type:**  \n"
+        "**Klik på en dato for at skifte type:**  \n"
         "🟢 **Åben** → 🔵 **Aktivitet** → 🔴 **Lukket** → 🟢 ...  \n"
         "*(Man/Tirs/Ons/Søn er åbne som standard)*")
     st.markdown("")
@@ -714,12 +744,12 @@ def _tab_opstaetning(data:dict):
         "Deadline for indsendelse af ønsker",
         value=existing_dl,
         min_value=date(år-1,1,1),
-        max_value=date(år,mdr,calendar.monthrange(år,mdr)[1]),
+        max_value=date(år,mdr,1)-timedelta(days=1),
         key="deadline_input",
         format="DD-MM-YYYY",
         help="Vises til de frivillige som en påmindelse. Påvirker ikke systemet automatisk.")
     st.caption(
-        f"Standard er 3 dage før månedens sidste dag "
+        f"Standard er 3 dage inden måneden starter "
         f"({fmt_dansk_lang(default_dl)}, dvs. {fmt_dansk(default_dl)})")
 
     st.markdown("")
@@ -745,11 +775,6 @@ def _tab_opstaetning(data:dict):
         else:
             data["monthly_config"][mkey]=_build_cfg(True)
             save(data); st.success(f"🎉 **{MÅNEDER[mdr]} {år}** er frigivet!"); st.rerun()
-
-    prefs_m=data["preferences"].get(mkey,{})
-    aktive=sum(1 for v in data["volunteers"].values() if v.get("active",True))
-    if aktive:
-        st.info(f"📊 **{len(prefs_m)}/{aktive}** aktive frivillige har indsendt ønsker.")
 
 # ── Tab: Vagttildeling ─────────────────────────────────────────────────────────
 def _tab_tildeling(data:dict):
