@@ -362,14 +362,16 @@ def auto_assign(data: dict, mkey: str) -> dict:
     # FASE 1 — Åbningsoptimering med præferencer
     # ════════════════════════════════════════════════════════════════════════
     #
-    # Kør iterative gennemgange. I hver gennemgang:
-    #   - Find kun dage der KAN åbnes (nok villige præference-kandidater)
-    #   - Sortér dem hårdest (færrest kandidater) FØRST
-    #   - Tildel op til min_per og åbn dagen
+    # Aktivitetsdage behandles ALTID FØR normale åbningsdage — det er den
+    # højeste prioritet i hele algoritmen.
     #
-    # Gentag så længe mindst én ny dag åbner pr. gennemgang.
-    # Iteration er nødvendig: åbning af dag A bruger kvoter, og kan dermed
-    # umuliggøre åbning af dag B — genberegn prioritet efter hver åbning.
+    # Inden for hver dagtype (aktivitet / normal) sorteres dage efter
+    # sværhedsgrad: færrest tilgængelige præference-kandidater = hårdest = FØRST.
+    # Kun dage der faktisk KAN åbnes (nok kandidater) medtages.
+    #
+    # Iteration gentages så længe mindst én ny dag åbner pr. gennemgang:
+    # åbning af dag A bruger kvoter og kan umuliggøre åbning af dag B,
+    # så vi genberegner prioritet efter hver runde.
 
     prev_open = -1
     while True:
@@ -378,13 +380,17 @@ def auto_assign(data: dict, mkey: str) -> dict:
             break           # ingen fremskridt → stop
         prev_open = open_now
 
-        # Kun dage der faktisk KAN åbnes med tilgængelige præference-kandidater
+        def _n_eligible(d: str) -> int:
+            return sum(1 for v in active if eligible(v, d, False))
+
         can_open = sorted(
             [d for d in active_d
              if len(shifts[d]) < min_per
-             and sum(1 for v in active if eligible(v, d, False))
-             >= (min_per - len(shifts[d]))],
-            key=lambda d: sum(1 for v in active if eligible(v, d, False)),
+             and _n_eligible(d) >= (min_per - len(shifts[d]))],
+            key=lambda d: (
+                0 if is_act_day(d) else 1,  # aktivitetsdage FØRST
+                _n_eligible(d),             # dernæst: hårdest (færrest kandidater)
+            ),
         )
         for d in can_open:
             fill_day(d, allow_no_pref=False)
@@ -394,27 +400,32 @@ def auto_assign(data: dict, mkey: str) -> dict:
     # ════════════════════════════════════════════════════════════════════════
     #
     # Én frivillig tildeles ad gangen — den med FLEST resterende vagter
-    # for at sikre ligelig fordeling. Efter hver tildeling genstarter vi
-    # sorteringen, da state (remaining, shifts) har ændret sig.
+    # for at sikre ligelig fordeling.
     #
-    # Prioritetsrækkefølge for dagvalg (per frivillig):
-    #   1. Aktivitetsdag + aktivitetsudvalg-frivillig
-    #   2. Dag der KUN mangler mig for at åbne (gap == 1)
-    #   3. Åben dag med præference (kvoten bruges meningsfuldt)
-    #   4. Næsten-åben dag med præference (gap == 2, hjælp nyttig)
-    #   5. Åben dag uden præference (sikrer mindst mulig spild)
-    #   6. Næsten-åben dag uden præference
-    #   — Dage med gap ≥ 3 og ingen præference undgås — for høj risiko for spild
+    # Prioritetsrækkefølge for dagvalg (lav score = høj prioritet):
     #
-    # Maks iterationer = samlet resterende kvote × 2 (med luft til kanttilfælde).
+    #   Niveau A — dagtype × akt.udvalg-match:
+    #     0 = aktivitetsdag OG frivillig er aktivitetsudvalg
+    #     1 = aktivitetsdag (frivillig er ikke aktivitetsudvalg)
+    #     2 = normal åbningsdag
+    #
+    #   Niveau B — åbningsstatus (opn):
+    #     0 = dag åbner med præcis denne frivillig (gap == 1)
+    #     1 = dag er allerede åben
+    #     2 = dag mangler 2 (hjælp stadig nyttig)
+    #     3 = dag mangler 3+ (langt fra åbning)
+    #
+    #   Niveau C — præference: 0=ja, 1=måske, 2=ingen
+    #   Niveau D — færreste allerede tildelt (fordel lighedsprincippet)
+    #
+    # Dage der aldrig kan åbnes springes over (ingen tilgængelige kandidater).
 
     total_remaining = sum(remaining.values())
     for _ in range(total_remaining * 2 + 1):
         vols_left = [v for v in active if remaining[v] > 0]
         if not vols_left:
             break
-        # Flest resterende vagter → denne frivillig tildeles nu (lighed)
-        vols_left.sort(key=lambda v: -remaining[v])
+        vols_left.sort(key=lambda v: -remaining[v])   # flest resterende FØRST
 
         assigned = False
         for vid in vols_left:
@@ -428,23 +439,28 @@ def auto_assign(data: dict, mkey: str) -> dict:
                 gap     = min_per - len(shifts[d])   # ≤ 0 = allerede åben
                 is_open = gap <= 0
 
-                # Spring over dage der er umulige at åbne (for meget spild)
+                # Spring over dage der aldrig kan åbnes
                 if not is_open:
                     avail = sum(1 for v in active if eligible(v, d, True))
                     if avail < gap:
-                        continue    # Kan aldrig åbnes — spring over
+                        continue
 
-                # Prioritetsnøgle (lav = bedre)
-                akt  = 0 if (is_act_day(d) and is_akt[vid]) else 1
-                # 0=åbner nu, 1=åben dag, 2=næsten åben (gap≤2), 3=langt fra åben
-                opn  = (0 if gap == 1
-                        else 1 if is_open
-                        else 2 if gap == 2
-                        else 3)
-                pref = 2 - prio[vid][d]              # 0=ja, 1=måske, 2=ingen
-                fill = len(shifts[d])                # færreste foretrækkes
+                # Niveau A: dagtype × akt.udvalg
+                if is_act_day(d):
+                    dtype = 0 if is_akt[vid] else 1
+                else:
+                    dtype = 2
 
-                score = (akt, opn, pref, fill)
+                # Niveau B: åbningsstatus
+                opn = (0 if gap == 1
+                       else 1 if is_open
+                       else 2 if gap == 2
+                       else 3)
+
+                pref  = 2 - prio[vid][d]    # 0=ja, 1=måske, 2=ingen
+                fill  = len(shifts[d])
+
+                score = (dtype, opn, pref, fill)
                 if best_score is None or score < best_score:
                     best_score = score
                     best_d = d
@@ -462,14 +478,16 @@ def auto_assign(data: dict, mkey: str) -> dict:
     # FASE 3 — Nødpass: åbn resterende dage uden præferencekrav
     # ════════════════════════════════════════════════════════════════════════
     #
-    # Kun aktiveret for dage der stadig er lukkede efter fase 1+2.
-    # Bruger frivillige uden præference — absolut last resort.
-    # Tættest-på-åbning (flest allerede tildelt) behandles FØRST.
-    # fill_day afviser stadig dage der ikke kan nå min_per (ingen spild).
+    # Aktivitetsdage behandles stadig FØRST, dernæst normale dage.
+    # Inden for hver type: tættest-på-åbning (flest allerede tildelt) FØRST.
+    # fill_day afviser dage der ikke kan nå min_per — ingen spild.
 
     still_closed = sorted(
         [d for d in active_d if len(shifts[d]) < min_per],
-        key=lambda d: -len(shifts[d]),
+        key=lambda d: (
+            0 if is_act_day(d) else 1,  # aktivitetsdage FØRST
+            -len(shifts[d]),            # tættest på åbning
+        ),
     )
     for d in still_closed:
         fill_day(d, allow_no_pref=True)
@@ -499,12 +517,16 @@ def auto_assign(data: dict, mkey: str) -> dict:
     }
 
     data["assignments"][mkey] = {
-        "shifts":      {d: lst for d, lst in shifts.items()},
-        "open":        open_d,
-        "closed":      closed_d,
-        "activity":    activity_d,
-        "unmet_quota": unmet,
-        "generated_at": datetime.now().strftime("%d/%m/%Y %H:%M"),
+        "shifts":              {d: lst for d, lst in shifts.items()},
+        "open":                open_d,
+        "closed":              closed_d,
+        "activity":            activity_d,
+        # Alle dage der var konfigureret som OPEN eller ACTIVITY i opsætningen.
+        # Bruges til korrekt beregning af lukkedage og åbningsprocent:
+        # vi tæller KUN dage der faktisk var planlagt åbne — ikke hele måneden.
+        "configured_open":     active_d,
+        "unmet_quota":         unmet,
+        "generated_at":        datetime.now().strftime("%d/%m/%Y %H:%M"),
     }
     return data
 
@@ -799,22 +821,34 @@ def _vis_vagtplan(data: dict, vid: str, vol: dict, mkey: str):
     shifts    = asgn.get("shifts", {})
     open_days = asgn.get("open", [])
     activity  = asgn.get("activity", [])
-    closed    = asgn.get("closed", [])
+
+    # Lukkedage = konfigurerede åbne/aktivitetsdage der IKKE fik nok frivillige.
+    # Vi bruger configured_open hvis tilgængeligt; ellers fallback til open+closed.
+    configured_open = asgn.get("configured_open", None)
+    if configured_open is not None:
+        open_set_cfg = set(configured_open)
+        lukkede_dage = [d for d in configured_open if d not in set(open_days)]
+    else:
+        # Bagudkompatibel: brug closed-listen men fjern rene setup-lukkede dage
+        lukkede_dage = [d for d in asgn.get("closed", []) if d in (asgn.get("shifts", {}))]
 
     # Mine vagter — kun vis dem der er på åbne dage (frivillig-visning)
     my_all_shifts  = sorted(d for d, vs in shifts.items() if vid in vs)
-    my_open_shifts = [d for d in my_all_shifts if d in open_days]
+    my_open_shifts = [d for d in my_all_shifts if d in set(open_days)]
 
-    kraevet = vol.get("required_shifts", 2)
-    åbne    = len(open_days)
-    aktivit = len(activity)
-    lukkede = len(closed)
+    kraevet      = vol.get("required_shifts", 2)
+    åbne         = len(open_days)
+    aktivit      = len(activity)
+    lukkede      = len(lukkede_dage)
+    total_cfg    = åbne + lukkede
+    pct          = round(100 * åbne / total_cfg) if total_cfg > 0 else 0
 
     c1, c2, c3 = st.columns(3)
     c1.metric("✅ Dine vagter",   f"{len(my_open_shifts)}/{kraevet}")
     c2.metric("🟢 Åbningsdage",   åbne,
               delta=f"heraf {aktivit} aktivitet" if aktivit else None, delta_color="off")
-    c3.metric("🔴 Lukkedage",     lukkede)
+    c3.metric("📈 Åbningspct.",   f"{pct}%",
+              delta=f"{lukkede} lukket" if lukkede else None, delta_color="inverse")
 
     st.markdown("### 📅 Vagtplan")
     # volunteer_view=True: lukkedage viser ikke navne
@@ -1304,20 +1338,31 @@ def _tab_resultater(data: dict):
 
     open_days = asgn.get("open", [])
     activity  = asgn.get("activity", [])
-    closed    = asgn.get("closed", [])
     shifts    = asgn.get("shifts", {})
 
-    åbne    = len(open_days)
-    aktivit = len(activity)
-    lukkede = len(closed)
-    total   = åbne + lukkede
-    pct     = round(100 * åbne / total) if total > 0 else 0
+    # Lukkedage og åbnings-% baseres KUN på konfigurerede åbne/aktivitetsdage —
+    # ikke hele måneden. Dage der var sat til CLOSED i opsætningen tæller ikke.
+    configured_open = asgn.get("configured_open", None)
+    if configured_open is not None:
+        lukkede_dage = [d for d in configured_open if d not in set(open_days)]
+    else:
+        lukkede_dage = [d for d in asgn.get("closed", []) if d in shifts]
+
+    åbne      = len(open_days)
+    aktivit   = len(activity)
+    lukkede   = len(lukkede_dage)
+    total_cfg = åbne + lukkede
+    pct       = round(100 * åbne / total_cfg) if total_cfg > 0 else 0
 
     c1, c2, c3 = st.columns(3)
-    c1.metric("🟢 Åbningsdage", åbne,
+    c1.metric("🟢 Åbningsdage",   åbne,
               delta=f"heraf {aktivit} aktivitet" if aktivit else None, delta_color="off")
-    c2.metric("🔴 Lukkedage",   lukkede)
-    c3.metric("📈 Åbningspct.", f"{pct}%")
+    c2.metric("🔴 Lukkedage",     lukkede,
+              delta="af planlagte dage", delta_color="off")
+    c3.metric("📈 Åbningspct.",   f"{pct}%")
+
+    # Til kalenderen: brug den fulde closed-liste (inkl. setup-lukkede) for farvelægning
+    closed_for_cal = asgn.get("closed", [])
 
     if asgn.get("unmet_quota"):
         with st.expander("⚠️ Frivillige med ufyldt kvote"):
@@ -1328,7 +1373,7 @@ def _tab_resultater(data: dict):
     st.markdown("### 📅 Kalender-oversigt (Admin — alle tildelinger)")
     # Admin-kalender: volunteer_view=False → navne vises på ALLE dage inkl. lukkedage
     st.markdown(
-        cal_html_resultater(mkey, shifts, open_days, closed, activity, vols,
+        cal_html_resultater(mkey, shifts, open_days, closed_for_cal, activity, vols,
                             volunteer_view=False),
         unsafe_allow_html=True)
 
