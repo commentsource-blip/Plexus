@@ -1,574 +1,744 @@
 """
-Plexus Vagtplan – Vagtønske og automatisk vagttildeling
-Run med: streamlit run plexus_vagtplan.py
+Plexus Vagtplan
+Lavet af Fabian Salvatore
 """
-
 import streamlit as st
-import json
-import os
-import calendar
+import json, os, calendar
 from datetime import date, datetime
 from collections import defaultdict
 
-# ── Side-konfiguration ─────────────────────────────────────────────────────
-st.set_page_config(
-    page_title="Plexus Vagtplan",
-    page_icon="📅",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
+# ── Konfiguration ─────────────────────────────────────────────────────────────
+VERSION      = date.today().strftime("%d.%m.%Y")
+DATA_FILE    = "plexus_data.json"
+VAGTDAG_IDX  = {0, 1, 2, 6}   # Man=0, Tirs=1, Ons=2, Son=6
+DAGNAVNE     = {0:"Man", 1:"Tirs", 2:"Ons", 3:"Tor", 4:"Fre", 5:"Lor", 6:"Son"}
+MANEDER      = ["","Januar","Februar","Marts","April","Maj","Juni",
+                "Juli","August","September","Oktober","November","December"]
 
-# ── Konstanter ─────────────────────────────────────────────────────────────
-DATA_FILE = "plexus_data.json"
-
-VAGTDAGE = {0: "Mandag", 1: "Tirsdag", 2: "Onsdag", 6: "Søndag"}   # ugedage der er åbne
-UGEDAGE_DK = ["Man", "Tirs", "Ons", "Tors", "Fre", "Lør", "Søn"]
-MÅNEDER_DK = [
-    "", "Januar", "Februar", "Marts", "April", "Maj", "Juni",
-    "Juli", "August", "September", "Oktober", "November", "December"
-]
-
-CSS = """
-<style>
-section[data-testid="stSidebar"] { min-width: 220px !important; max-width: 240px !important; }
-div[data-testid="stMetric"] { background: #f8f9fa; border-radius: 8px; padding: 12px 16px; }
-.status-open  { display:inline-block; background:#dcfce7; color:#166534;
-                border-radius:6px; padding:2px 10px; font-size:0.82rem; font-weight:500; }
-.status-closed{ display:inline-block; background:#fee2e2; color:#991b1b;
-                border-radius:6px; padding:2px 10px; font-size:0.82rem; font-weight:500; }
-.badge-sikker { display:inline-block; background:#22c55e; color:#fff;
-                border-radius:6px; padding:1px 8px; font-size:0.78rem; }
-.badge-måske  { display:inline-block; background:#f59e0b; color:#fff;
-                border-radius:6px; padding:1px 8px; font-size:0.78rem; }
-</style>
-"""
-
-# ── Data-hjælpere ──────────────────────────────────────────────────────────
-
-def load_data() -> dict:
+# ── Data-hjaelpere ────────────────────────────────────────────────────────────
+def load() -> dict:
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
     return {
-        "volunteers": {},           # {id: {name, required_shifts, active}}
-        "monthly_config": {},       # {month_key: {dates, min_per_shift, min_selections, released}}
-        "preferences": {},          # {month_key: {vol_id: {date: "sikker"/"måske"}}}
-        "assignments": {},          # {month_key: {shifts, open, closed, unmet_quota, generated_at}}
+        "volunteers": {},
+        "monthly_config": {},
+        "preferences": {},
+        "assignments": {},
         "admin_password": "plexus2024",
-        "next_vol_id": 1,
+        "next_id": 1,
     }
 
-
-def save_data(data: dict):
+def save(data: dict):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
+def mk(y, m)       -> str: return f"{y}-{m:02d}"
+def mk_label(k)    -> str: y, m = k.split("-"); return f"{MANEDER[int(m)]} {y}"
 
-def month_key(year: int, month: int) -> str:
-    return f"{year}-{month:02d}"
+def all_vagtdates(y, m) -> list:
+    n = calendar.monthrange(y, m)[1]
+    return [date(y, m, d).isoformat()
+            for d in range(1, n + 1)
+            if date(y, m, d).weekday() in VAGTDAG_IDX]
 
-
-def month_label(mk: str) -> str:
-    y, m = mk.split("-")
-    return f"{MÅNEDER_DK[int(m)]} {y}"
-
-
-def vagtdatoer(year: int, month: int) -> list[str]:
-    """Returnerer alle Man/Tirs/Ons/Søn-datoer i måneden som ISO-strenge."""
-    n = calendar.monthrange(year, month)[1]
-    return [
-        date(year, month, d).isoformat()
-        for d in range(1, n + 1)
-        if date(year, month, d).weekday() in VAGTDAGE
-    ]
-
-
-def fmt_dato(d_str: str) -> str:
+def fmt(d_str: str) -> str:
     d = date.fromisoformat(d_str)
-    return f"{VAGTDAGE[d.weekday()]} {d.day}/{d.month}"
+    dag_dk = {0:"Mandag",1:"Tirsdag",2:"Onsdag",6:"Sondag"}
+    return f"{dag_dk.get(d.weekday(), DAGNAVNE[d.weekday()])} {d.day}/{d.month}"
 
+# ── Fordelingsalgoritme ───────────────────────────────────────────────────────
+def auto_assign(data: dict, mkey: str) -> dict:
+    cfg      = data["monthly_config"].get(mkey, {})
+    dates    = cfg.get("dates", [])
+    min_per  = cfg.get("min_per_shift", 1)
+    max_per  = cfg.get("max_per_shift", 5)
+    prefs_m  = data["preferences"].get(mkey, {})
+    vols     = data["volunteers"]
+    active   = [vid for vid, v in vols.items() if v.get("active", True)]
 
-# ── Fordelingsalgoritme ────────────────────────────────────────────────────
-
-def auto_assign(data: dict, mk: str) -> dict:
-    """
-    Fordeler vagter for at maksimere åbningsdage.
-    Prioriterer 'Helt sikker' over 'Måske'.
-    Fylder resterende kvote op bagefter.
-    """
-    config = data["monthly_config"].get(mk, {})
-    dates = config.get("dates", [])
-    min_per = config.get("min_per_shift", 1)
-    prefs_data = data["preferences"].get(mk, {})
-    vols = data["volunteers"]
-
-    active = [vid for vid, v in vols.items() if v.get("active", True)]
-
-    # Præference-matrix: 2=sikker, 1=måske, 0=ingen
     prio = {
         vid: {
-            d: (2 if prefs_data.get(vid, {}).get(d) == "sikker"
-                else 1 if prefs_data.get(vid, {}).get(d) == "måske"
+            d: (2 if prefs_m.get(vid, {}).get(d) == "sikker"
+                else 1 if prefs_m.get(vid, {}).get(d) == "maske"
                 else 0)
             for d in dates
         }
         for vid in active
     }
+    remaining = {vid: vols[vid].get("required_shifts", 2) for vid in active}
+    shifts    = {d: [] for d in dates}
 
-    required = {vid: vols[vid].get("required_shifts", 4) for vid in active}
-    remaining = dict(required)
-    shifts: dict[str, list] = {d: [] for d in dates}
+    sorted_dates = sorted(dates, key=lambda d: sum(1 for v in active if prio[v][d] > 0))
 
-    # Sorter datoer efter scarcity – sværest at besætte først
-    def urgency(d):
-        return sum(1 for v in active if prio[v][d] > 0)
+    # Fase 1a: min_per_shift med "Ja" (prio=2) forst
+    # Fase 1b: supplér med "Maske" (prio=1)
+    for phase_prio in [2, 1]:
+        for d in sorted_dates:
+            if len(shifts[d]) >= min_per:
+                continue
+            cands = [v for v in active
+                     if prio[v][d] >= phase_prio
+                     and remaining[v] > 0
+                     and v not in shifts[d]
+                     and len(shifts[d]) < max_per]
+            cands.sort(key=lambda v: (prio[v][d], remaining[v]), reverse=True)
+            for v in cands:
+                if len(shifts[d]) >= min_per:
+                    break
+                shifts[d].append(v)
+                remaining[v] -= 1
 
-    sorted_dates = sorted(dates, key=urgency)
-
-    # Fase 1: Forsøg at åbne hver dag (opnå min_per_shift dækning)
-    for d in sorted_dates:
-        candidates = [
-            vid for vid in active
-            if prio[vid][d] > 0 and remaining[vid] > 0 and vid not in shifts[d]
-        ]
-        candidates.sort(key=lambda v: (prio[v][d], remaining[v]), reverse=True)
-        assigned = 0
-        for vid in candidates:
-            if assigned >= min_per:
-                break
-            shifts[d].append(vid)
-            remaining[vid] -= 1
-            assigned += 1
-
-    # Fase 2: Fyld resterende kvote med frivilligens ønsker
+    # Fase 2: fyld resterende kvote
     for vid in sorted(active, key=lambda v: remaining[v], reverse=True):
         while remaining[vid] > 0:
-            cands = [
-                d for d in dates
-                if prio[vid][d] > 0 and vid not in shifts[d]
-            ]
+            cands = [d for d in dates
+                     if prio[vid][d] > 0
+                     and vid not in shifts[d]
+                     and len(shifts[d]) < max_per]
             if not cands:
                 break
-            # Foretruk dage der ellers er tomme (for at åbne flest mulige)
-            cands.sort(key=lambda d: (len(shifts[d]), -prio[vid][d]))
+            cands.sort(key=lambda d: (len(shifts[d]) >= min_per, -prio[vid][d], len(shifts[d])))
             shifts[cands[0]].append(vid)
             remaining[vid] -= 1
 
-    open_days = [d for d in dates if len(shifts[d]) >= min_per]
-    closed_days = [d for d in dates if len(shifts[d]) < min_per]
+    open_d   = [d for d in dates if len(shifts[d]) >= min_per]
+    closed_d = [d for d in dates if len(shifts[d]) <  min_per]
 
-    data["assignments"][mk] = {
+    data["assignments"][mkey] = {
         "shifts": shifts,
-        "open": open_days,
-        "closed": closed_days,
-        "unmet_quota": {vid: remaining[vid] for vid in active if remaining[vid] > 0},
+        "open": open_d,
+        "closed": closed_d,
+        "unmet_quota": {v: remaining[v] for v in active if remaining[v] > 0},
         "generated_at": datetime.now().strftime("%d/%m/%Y %H:%M"),
     }
     return data
 
+# ── HTML-kalendre (kun visning) ───────────────────────────────────────────────
+def _cal_header_html(vagtdag_color: str, other_color: str, border_color: str) -> str:
+    dag_labels = ["Man","Tirs","Ons","Tor","Fre","Lor","Son"]
+    cells = ""
+    for i, name in enumerate(dag_labels):
+        is_vd = i in VAGTDAG_IDX
+        cells += (
+            f'<th style="padding:8px 4px;font-size:13px;font-weight:600;'
+            f'border:1px solid #e0e0e0;'
+            f'background:{"#f0f7ff" if is_vd else "#f9f9f9"};'
+            f'color:{vagtdag_color if is_vd else other_color};'
+            f'border-bottom:3px solid {border_color if is_vd else "#e0e0e0"}">'
+            f'{name}</th>'
+        )
+    return f"<thead><tr>{cells}</tr></thead>"
 
-# ── App-sider ──────────────────────────────────────────────────────────────
 
-def side_frivillig(data: dict):
-    st.header("Mine vagtønsker")
+def cal_html_results(mkey: str, shifts: dict, open_days: list, vols: dict) -> str:
+    y, m = int(mkey[:4]), int(mkey[5:7])
+    weeks = calendar.monthcalendar(y, m)
+    rows_html = ""
+    for week in weeks:
+        rows_html += "<tr>"
+        for i, day in enumerate(week):
+            if day == 0:
+                rows_html += '<td style="background:#fafafa;border:1px solid #e8e8e8;padding:6px"></td>'
+                continue
+            d_str   = date(y, m, day).isoformat()
+            is_vdag = i in VAGTDAG_IDX
+            is_open = d_str in open_days
+            navne   = [vols[v]["name"] for v in shifts.get(d_str, []) if v in vols]
 
-    active_vols = {vid: v for vid, v in data["volunteers"].items() if v.get("active", True)}
-    if not active_vols:
-        st.info("Ingen frivillige er oprettet endnu. Kontakt administratoren.")
-        return
+            if is_vdag:
+                bg    = "#e8f5e9" if is_open else "#ffebee"
+                badge = "Aben" if is_open else "Lukket"
+                dot   = "&#128994;" if is_open else "&#128308;"
+                names_html = "".join(
+                    f'<div style="font-size:11px;color:#333;margin-top:3px;'
+                    f'background:#ffffffcc;border-radius:3px;padding:1px 5px">{n}</div>'
+                    for n in navne
+                )
+                rows_html += (
+                    f'<td style="background:{bg};border:1px solid #ccc;'
+                    f'padding:7px 5px;vertical-align:top;min-width:80px">'
+                    f'<div style="font-weight:700;font-size:17px;color:#222">{day}</div>'
+                    f'<div style="font-size:10px;color:#555;margin-bottom:3px">{dot} {badge}</div>'
+                    f'{names_html}</td>'
+                )
+            else:
+                rows_html += (
+                    f'<td style="background:#fafafa;border:1px solid #e8e8e8;'
+                    f'padding:7px 5px;text-align:center;color:#ccc;vertical-align:top">'
+                    f'<div style="font-size:14px">{day}</div></td>'
+                )
+        rows_html += "</tr>"
 
-    col1, col2 = st.columns([2, 2])
-    with col1:
-        navn_til_id = {v["name"]: vid for vid, v in sorted(active_vols.items(), key=lambda x: x[1]["name"])}
-        valgt_navn = st.selectbox("Vælg dit navn", ["— Vælg —"] + list(navn_til_id.keys()))
-    if valgt_navn == "— Vælg —":
-        st.info("Vælg dit navn ovenfor for at komme i gang.")
-        return
-
-    vid = navn_til_id[valgt_navn]
-    vol = data["volunteers"][vid]
-
-    # Kun frigivne måneder
-    frigivne = sorted(mk for mk, c in data["monthly_config"].items() if c.get("released"))
-    if not frigivne:
-        st.warning("Ingen vagter er frigivet endnu. Tjek igen senere.")
-        return
-
-    with col2:
-        valgt_mk = st.selectbox("Måned", frigivne, format_func=month_label)
-
-    config = data["monthly_config"][valgt_mk]
-    dates = config.get("dates", [])
-    min_valg = config.get("min_selections", 5)
-
-    # Vis egne tildelte vagter hvis fordeling er kørt
-    if valgt_mk in data.get("assignments", {}):
-        st.success("✅ Vagterne for denne måned er tildelt!")
-        assignment = data["assignments"][valgt_mk]
-        mine = sorted(d for d, vols in assignment["shifts"].items() if vid in vols)
-        if mine:
-            st.subheader(f"Dine vagter – {month_label(valgt_mk)}")
-            for d in mine:
-                st.write(f"✅ {fmt_dato(d)}")
-        else:
-            st.info("Du er ikke tildelt vagter denne måned.")
-        return
-
-    existing = data["preferences"].get(valgt_mk, {}).get(vid, {})
-
-    st.subheader(f"Vælg ønsker – {month_label(valgt_mk)}")
-    st.caption(
-        f"Markér mindst **{min_valg}** datoer. "
-        f"Din aftalte månedlige kvote: **{vol.get('required_shifts', 4)} vagter**."
+    return (
+        '<div style="overflow-x:auto">'
+        '<table style="border-collapse:collapse;width:100%;table-layout:fixed">'
+        + _cal_header_html("#1565c0", "#bbb", "#1565c0")
+        + f"<tbody>{rows_html}</tbody></table></div>"
     )
 
-    # Præference-valgmuligheder
-    VALG = {"Ingen": "", "Måske": "måske", "Helt sikker": "sikker"}
-    VALG_REV = {v: k for k, v in VALG.items()}
 
-    nye_prefs: dict[str, str] = dict(existing)
+def cal_html_vagtplan(mkey: str, my_shifts: list) -> str:
+    y, m = int(mkey[:4]), int(mkey[5:7])
+    weeks = calendar.monthcalendar(y, m)
+    rows_html = ""
+    for week in weeks:
+        rows_html += "<tr>"
+        for i, day in enumerate(week):
+            if day == 0:
+                rows_html += '<td style="background:#fafafa;border:1px solid #e8e8e8;padding:8px"></td>'
+                continue
+            d_str   = date(y, m, day).isoformat()
+            is_vdag = i in VAGTDAG_IDX
+            is_mine = d_str in my_shifts
 
-    # Gruppér datoer efter uge
-    uger: dict[int, list] = defaultdict(list)
-    for d_str in sorted(dates):
-        uge = date.fromisoformat(d_str).isocalendar()[1]
-        uger[uge].append(d_str)
-
-    for uge_nr, uge_datoer in sorted(uger.items()):
-        cols = st.columns(len(uge_datoer))
-        for i, d_str in enumerate(uge_datoer):
-            d = date.fromisoformat(d_str)
-            current = existing.get(d_str, "")
-            with cols[i]:
-                st.markdown(f"**{VAGTDAGE[d.weekday()]}**  \n{d.day}/{d.month}")
-                valg = st.radio(
-                    label=d_str,
-                    options=list(VALG.keys()),
-                    index=list(VALG.values()).index(current) if current in VALG.values() else 0,
-                    key=f"pref_{valgt_mk}_{d_str}",
-                    label_visibility="collapsed",
-                    horizontal=False,
+            if is_vdag:
+                if is_mine:
+                    bg = "#1565c0"; num_color = "#fff"; badge = "Vagt"
+                else:
+                    bg = "#e3f2fd"; num_color = "#555"; badge = ""
+                rows_html += (
+                    f'<td style="background:{bg};border:1px solid #90caf9;'
+                    f'padding:10px 4px;text-align:center;vertical-align:middle">'
+                    f'<div style="font-size:18px;font-weight:700;color:{num_color}">{day}</div>'
+                    + (f'<div style="font-size:11px;color:#fff;margin-top:3px">&#10003; {badge}</div>'
+                       if is_mine else "")
+                    + "</td>"
                 )
-                nye_prefs[d_str] = VALG[valg]
+            else:
+                rows_html += (
+                    f'<td style="background:#fafafa;border:1px solid #e8e8e8;'
+                    f'padding:10px 4px;text-align:center;color:#ccc">'
+                    f'<div style="font-size:14px">{day}</div></td>'
+                )
+        rows_html += "</tr>"
 
-    markeret = sum(1 for p in nye_prefs.values() if p)
-    nok = markeret >= min_valg
+    return (
+        '<div style="overflow-x:auto">'
+        '<table style="border-collapse:collapse;width:100%;table-layout:fixed">'
+        + _cal_header_html("#1565c0", "#bbb", "#1565c0")
+        + f"<tbody>{rows_html}</tbody></table></div>"
+    )
+
+# ── Interaktiv praeferencekalender (frivillig) ────────────────────────────────
+def render_pref_calendar(mkey: str, released_dates: set, existing: dict) -> dict:
+    y, m   = int(mkey[:4]), int(mkey[5:7])
+    weeks  = calendar.monthcalendar(y, m)
+    prefs  = dict(existing)
+    labels = ["Man","Tirs","Ons","Tor","Fre","Lor","Son"]
+
+    hcols = st.columns(7)
+    for i, name in enumerate(labels):
+        is_vd = i in VAGTDAG_IDX
+        hcols[i].markdown(
+            f'<div style="text-align:center;font-weight:600;padding-bottom:4px;'
+            f'border-bottom:3px solid {"#1565c0" if is_vd else "#e0e0e0"};'
+            f'color:{"#1565c0" if is_vd else "#bbb"}">{name}</div>',
+            unsafe_allow_html=True,
+        )
+
+    for week in weeks:
+        wcols = st.columns(7)
+        for i, day in enumerate(week):
+            with wcols[i]:
+                if day == 0:
+                    st.markdown("&nbsp;", unsafe_allow_html=True)
+                    continue
+                d_str   = date(y, m, day).isoformat()
+                is_vdag = i in VAGTDAG_IDX
+                is_rel  = d_str in released_dates
+
+                if is_vdag and is_rel:
+                    current   = prefs.get(d_str, "")
+                    day_color = "#1565c0" if current == "sikker" else "#e65100" if current == "maske" else "#555"
+                    st.markdown(
+                        f'<div style="text-align:center;font-size:16px;font-weight:700;'
+                        f'color:{day_color};margin-bottom:2px">{day}</div>',
+                        unsafe_allow_html=True,
+                    )
+                    lbl_map = {"":"—","sikker":"Ja","maske":"Maske"}
+                    cur_lbl = lbl_map.get(current, "—")
+                    sel = st.selectbox(
+                        label=d_str,
+                        options=["—","Ja","Maske"],
+                        index=["—","Ja","Maske"].index(cur_lbl),
+                        key=f"vo_{mkey}_{d_str}",
+                        label_visibility="collapsed",
+                    )
+                    prefs[d_str] = {"—":"","Ja":"sikker","Maske":"maske"}[sel]
+                else:
+                    col = "#ddd" if not is_vdag else "#ccc"
+                    st.markdown(
+                        f'<div style="text-align:center;color:{col};'
+                        f'font-size:14px;padding:6px 0">{day}</div>',
+                        unsafe_allow_html=True,
+                    )
+    return prefs
+
+# ── Interaktiv admin-kalender (opstaetning) ───────────────────────────────────
+def render_setup_calendar(mkey: str, current_set: set) -> list:
+    y, m   = int(mkey[:4]), int(mkey[5:7])
+    weeks  = calendar.monthcalendar(y, m)
+    labels = ["Man","Tirs","Ons","Tor","Fre","Lor","Son"]
+    selected = []
+
+    hcols = st.columns(7)
+    for i, name in enumerate(labels):
+        is_vd = i in VAGTDAG_IDX
+        hcols[i].markdown(
+            f'<div style="text-align:center;font-weight:600;padding-bottom:4px;'
+            f'border-bottom:3px solid {"#2e7d32" if is_vd else "#e0e0e0"};'
+            f'color:{"#2e7d32" if is_vd else "#bbb"}">{name}</div>',
+            unsafe_allow_html=True,
+        )
+
+    for week in weeks:
+        wcols = st.columns(7)
+        for i, day in enumerate(week):
+            with wcols[i]:
+                if day == 0:
+                    st.markdown("&nbsp;", unsafe_allow_html=True)
+                    continue
+                d_str   = date(y, m, day).isoformat()
+                is_vdag = i in VAGTDAG_IDX
+                if is_vdag:
+                    checked = st.checkbox(str(day), value=d_str in current_set,
+                                          key=f"dc_{mkey}_{d_str}")
+                    if checked:
+                        selected.append(d_str)
+                else:
+                    st.markdown(
+                        f'<div style="text-align:center;color:#ccc;'
+                        f'font-size:14px;padding:8px 0">{day}</div>',
+                        unsafe_allow_html=True,
+                    )
+    return sorted(selected)
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  FRIVILLIG-SIDE
+# ══════════════════════════════════════════════════════════════════════════════
+def side_frivillig(data: dict):
+    if "vol_id" not in st.session_state:
+        st.session_state.vol_id = None
+
+    active_vols = {vid: v for vid, v in data["volunteers"].items() if v.get("active", True)}
+
+    if st.session_state.vol_id is None:
+        st.markdown("## Plexus Vagtplan")
+        st.markdown("### Hvem er du?")
+        if not active_vols:
+            st.info("Ingen frivillige er oprettet endnu. Kontakt administratoren.")
+            return
+        navne = {v["name"]: vid for vid, v in sorted(active_vols.items(), key=lambda x: x[1]["name"])}
+        valgt = st.selectbox("Vaelg dit navn", ["— Vaelg —"] + list(navne.keys()))
+        if valgt != "— Vaelg —":
+            st.session_state.vol_id = navne[valgt]
+            st.rerun()
+        return
+
+    vid = st.session_state.vol_id
+    if vid not in data["volunteers"]:
+        st.session_state.vol_id = None
+        st.rerun()
+
+    vol = data["volunteers"][vid]
+
+    c1, c2 = st.columns([5, 1])
+    c1.markdown(f"## Hej, {vol['name']}!")
+    if c2.button("<- Skift person"):
+        st.session_state.vol_id = None
+        st.rerun()
+    st.divider()
+
+    t1, t2 = st.tabs(["Vagtplan", "Vagtonsker"])
+    with t1:
+        _vol_vagtplan(data, vid, vol)
+    with t2:
+        _vol_vagtonsker(data, vid, vol)
+
+
+def _vol_vagtplan(data: dict, vid: str, vol: dict):
+    assignments = data.get("assignments", {})
+    released    = [k for k, c in data["monthly_config"].items() if c.get("released")]
+    all_months  = sorted(set(list(assignments.keys()) + released), reverse=True)
+
+    if not all_months:
+        st.info("Ingen vagtplaner er tilgaengelige endnu.")
+        return
+
+    now      = datetime.now()
+    cur_mk   = mk(now.year, now.month)
+    default  = cur_mk if cur_mk in all_months else all_months[0]
+    sel_mk   = st.selectbox("Maaned", all_months, index=all_months.index(default),
+                             format_func=mk_label, key="vp_month")
+
+    if sel_mk not in assignments:
+        st.info(f"Vagtplanen for **{mk_label(sel_mk)}** er endnu ikke genereret. "
+                "Tjek igen, naar administratoren har tildelt vagterne.")
+        return
+
+    asgn      = assignments[sel_mk]
+    my_shifts = sorted(d for d, vs in asgn["shifts"].items() if vid in vs)
+    kraevet   = vol.get("required_shifts", 2)
+
+    st.markdown(f"**{mk_label(sel_mk)}** — du har **{len(my_shifts)}/{kraevet}** vagter")
+    if len(my_shifts) < kraevet:
+        st.warning(f"Du fik {kraevet - len(my_shifts)} faerre vagt(er) end aftalt.")
+
+    st.markdown(cal_html_vagtplan(sel_mk, my_shifts), unsafe_allow_html=True)
+    st.markdown("")
+
+    if my_shifts:
+        st.markdown("**Dine vagter:**")
+        for d in my_shifts:
+            st.success(f"  {fmt(d)}")
+    else:
+        st.info("Du er ikke tildelt vagter denne maaned.")
+
+
+def _vol_vagtonsker(data: dict, vid: str, vol: dict):
+    frigivne    = sorted(k for k, c in data["monthly_config"].items() if c.get("released"))
+    assignments = data.get("assignments", {})
+    aabne       = [k for k in frigivne if k not in assignments]
+
+    if not aabne:
+        if frigivne:
+            st.info("Vagtplanen er genereret for de frigivne maaneder. Se fanen **Vagtplan** for dine vagter.")
+        else:
+            st.info("Ingen maaneder er frigivet endnu. Tjek igen senere.")
+        return
+
+    sel_mk   = st.selectbox("Maaned", aabne, format_func=mk_label, key="vo_month")
+    cfg      = data["monthly_config"][sel_mk]
+    rel_set  = set(cfg.get("dates", []))
+    min_sel  = cfg.get("min_selections", 5)
+    existing = data["preferences"].get(sel_mk, {}).get(vid, {})
+
+    st.markdown(f"**{mk_label(sel_mk)}** — vaelg mindst **{min_sel}** datoer")
+    st.caption(f"Din aftalte kvote denne maaned: **{vol.get('required_shifts', 2)} vagter**")
+
+    pkey = f"prefs_{sel_mk}_{vid}"
+    if pkey not in st.session_state:
+        st.session_state[pkey] = dict(existing)
+
+    prefs = render_pref_calendar(sel_mk, rel_set, st.session_state[pkey])
+    st.session_state[pkey] = prefs
+
+    markeret = sum(1 for p in prefs.values() if p)
+    nok      = markeret >= min_sel
 
     st.divider()
-    col_info, col_btn = st.columns([3, 1])
-    with col_info:
-        farve = "green" if nok else "red"
-        st.markdown(f":{farve}[**{markeret}** datoer valgt (minimum {min_valg})]")
-    with col_btn:
-        if st.button("💾 Gem ønsker", type="primary", disabled=not nok):
-            if valgt_mk not in data["preferences"]:
-                data["preferences"][valgt_mk] = {}
-            data["preferences"][valgt_mk][vid] = {k: v for k, v in nye_prefs.items() if v}
-            save_data(data)
-            st.success("Dine ønsker er gemt! ✅")
-            st.rerun()
+    ci, cb = st.columns([4, 1])
+    ci.markdown(
+        ("**" + str(markeret) + "** datoer valgt — "
+         + ("klar til at gemme" if nok else f"vaelg {min_sel - markeret} mere"))
+    )
+    if cb.button("Gem onsker", type="primary", disabled=not nok):
+        if sel_mk not in data["preferences"]:
+            data["preferences"][sel_mk] = {}
+        data["preferences"][sel_mk][vid] = {k: v for k, v in prefs.items() if v}
+        save(data)
+        st.success("Dine onsker er gemt! Du kan aendre dem igen naar som helst inden planen genereres.")
 
-    if not nok:
-        st.warning(f"⚠️ Vælg mindst {min_valg - markeret} dato(er) mere for at gemme.")
-
-
-# ── ADMIN ──────────────────────────────────────────────────────────────────
-
+# ══════════════════════════════════════════════════════════════════════════════
+#  ADMIN-SIDE
+# ══════════════════════════════════════════════════════════════════════════════
 def side_admin(data: dict):
     if "admin_ok" not in st.session_state:
         st.session_state.admin_ok = False
 
     if not st.session_state.admin_ok:
-        st.header("🔒 Administratorlogin")
+        st.header("Administratorlogin")
         pwd = st.text_input("Adgangskode", type="password")
         if st.button("Log ind", type="primary"):
-            if pwd == data["admin_password"]:
+            if pwd == data.get("admin_password", "plexus2024"):
                 st.session_state.admin_ok = True
                 st.rerun()
             else:
                 st.error("Forkert adgangskode.")
         return
 
-    with st.sidebar:
-        if st.button("🚪 Log ud"):
-            st.session_state.admin_ok = False
-            st.rerun()
-
-    st.header("⚙️ Administration")
+    c1, c2 = st.columns([5, 1])
+    c1.header("Administration")
+    if c2.button("Log ud"):
+        st.session_state.admin_ok = False
+        st.rerun()
 
     t1, t2, t3, t4 = st.tabs(
-        ["👥 Frivillige", "📅 Måneds-opsætning", "⚡ Vagttildeling", "📊 Resultater"]
+        ["Frivillige", "Maaneds-opstaetning", "Vagttildeling", "Resultater"]
     )
-    with t1:
-        tab_frivillige(data)
-    with t2:
-        tab_måneds_opsætning(data)
-    with t3:
-        tab_tildeling(data)
-    with t4:
-        tab_resultater(data)
+    with t1: _tab_frivillige(data)
+    with t2: _tab_setup(data)
+    with t3: _tab_tildeling(data)
+    with t4: _tab_resultater(data)
 
 
-def tab_frivillige(data: dict):
-    st.subheader("Administrer frivillige")
+def _tab_frivillige(data: dict):
+    st.subheader("Frivillige")
 
-    # Tilføj frivillig
-    with st.expander("➕ Tilføj ny frivillig", expanded=not data["volunteers"]):
+    with st.expander("Tilfoj ny frivillig", expanded=not data["volunteers"]):
         with st.form("add_vol", clear_on_submit=True):
             c1, c2 = st.columns(2)
-            navn = c1.text_input("Navn")
-            kvote = c2.number_input("Vagter pr. måned", 1, 20, 4)
-            if st.form_submit_button("Tilføj"):
+            navn  = c1.text_input("Navn")
+            kvote = c2.number_input("Vagter/maaned", 1, 20, 2)
+            if st.form_submit_button("Tilfoj frivillig"):
                 if navn.strip():
-                    new_id = str(data.get("next_vol_id", 1))
-                    data["volunteers"][new_id] = {
+                    nid = str(data.get("next_id", 1))
+                    data["volunteers"][nid] = {
                         "name": navn.strip(),
                         "required_shifts": int(kvote),
                         "active": True,
                     }
-                    data["next_vol_id"] = int(new_id) + 1
-                    save_data(data)
-                    st.success(f"✅ {navn} er tilføjet!")
+                    data["next_id"] = int(nid) + 1
+                    save(data)
+                    st.success(f"{navn.strip()} tilfojet!")
                     st.rerun()
                 else:
                     st.warning("Angiv et navn.")
 
     if not data["volunteers"]:
-        st.info("Ingen frivillige endnu.")
+        st.info("Ingen frivillige oprettet endnu.")
         return
 
-    st.subheader("Nuværende frivillige")
-    st.caption("Gem efter ændringer på hver linje.")
-
-    # Tabel-header
     h1, h2, h3, h4 = st.columns([3, 2, 1, 1])
     h1.markdown("**Navn**"); h2.markdown("**Vagter/md.**"); h3.markdown("**Aktiv**")
+    st.divider()
 
+    edits = {}
     for vid, vol in sorted(data["volunteers"].items(), key=lambda x: x[1]["name"]):
         c1, c2, c3, c4 = st.columns([3, 2, 1, 1])
         c1.write(vol["name"])
-        new_q = c2.number_input("", 1, 20, vol.get("required_shifts", 4),
-                                 key=f"q_{vid}", label_visibility="collapsed")
-        new_a = c3.checkbox("", vol.get("active", True), key=f"a_{vid}",
-                             label_visibility="collapsed")
-        if c4.button("Gem", key=f"s_{vid}"):
-            data["volunteers"][vid]["required_shifts"] = int(new_q)
-            data["volunteers"][vid]["active"] = new_a
-            save_data(data)
-            st.toast(f"✅ {vol['name']} opdateret")
+        q = c2.number_input("", 1, 20, vol.get("required_shifts", 2),
+                             key=f"q_{vid}", label_visibility="collapsed")
+        a = c3.checkbox("", vol.get("active", True),
+                        key=f"a_{vid}", label_visibility="collapsed")
+        edits[vid] = {"required_shifts": int(q), "active": a}
+        if c4.button("Slet", key=f"del_{vid}"):
+            del data["volunteers"][vid]
+            save(data)
+            st.rerun()
 
-    # Skift admin-adgangskode
-    with st.expander("🔑 Skift adgangskode"):
-        with st.form("change_pwd"):
-            np1 = st.text_input("Ny adgangskode", type="password")
-            np2 = st.text_input("Gentag ny adgangskode", type="password")
-            if st.form_submit_button("Skift"):
-                if np1 and np1 == np2:
-                    data["admin_password"] = np1
-                    save_data(data)
-                    st.success("Adgangskode ændret.")
+    st.divider()
+    if st.button("Gem alle aendringer", type="primary"):
+        for vid, vals in edits.items():
+            if vid in data["volunteers"]:
+                data["volunteers"][vid].update(vals)
+        save(data)
+        st.success("Alle aendringer gemt!")
+
+    with st.expander("Skift admin-adgangskode"):
+        with st.form("pwd_form"):
+            p1 = st.text_input("Ny adgangskode", type="password")
+            p2 = st.text_input("Gentag ny adgangskode", type="password")
+            if st.form_submit_button("Gem adgangskode"):
+                if p1 and p1 == p2:
+                    data["admin_password"] = p1
+                    save(data)
+                    st.success("Adgangskode aendret.")
                 else:
-                    st.error("Adgangskoderne stemmer ikke overens.")
+                    st.error("Adgangskoderne matcher ikke.")
 
 
-def tab_måneds_opsætning(data: dict):
-    st.subheader("Måneds-opsætning")
+def _tab_setup(data: dict):
+    st.subheader("Maaneds-opstaetning")
 
     now = datetime.now()
     c1, c2 = st.columns(2)
-    år = c1.number_input("År", 2024, 2030, now.year)
-    mdr = c2.selectbox("Måned", range(1, 13), index=now.month - 1,
-                        format_func=lambda x: MÅNEDER_DK[x])
+    ar  = int(c1.number_input("Ar", 2024, 2030, now.year))
+    mdr = int(c2.selectbox("Maaned", range(1, 13), index=now.month - 1,
+                             format_func=lambda x: MANEDER[x]))
 
-    mk = month_key(int(år), int(mdr))
-    alle_datoer = vagtdatoer(int(år), int(mdr))
-    existing = data["monthly_config"].get(mk, {})
-    valgte = set(existing.get("dates", alle_datoer))
+    mkey   = mk(ar, mdr)
+    cfg    = data["monthly_config"].get(mkey, {})
+    locked = cfg.get("released", False)
 
-    st.markdown(f"**Datoer (Man/Tirs/Ons/Søn) i {MÅNEDER_DK[int(mdr)]} {int(år)}:**")
-    st.caption("Fravælg datoer der ikke skal være vagter (helligdage, lukket osv.)")
+    if locked:
+        st.success(
+            f"**{MANEDER[mdr]} {ar}** er frigivet og laast. "
+            "Opstaetningen kan ikke aendres."
+        )
+        st.markdown(
+            f"- **Vagtdatoer:** {len(cfg.get('dates', []))} datoer  \n"
+            f"- **Min. frivillige/vagt:** {cfg.get('min_per_shift', 1)}  \n"
+            f"- **Max. frivillige/vagt:** {cfg.get('max_per_shift', 5)}  \n"
+            f"- **Min. onsker/frivillig:** {cfg.get('min_selections', 5)}"
+        )
+        prefs_m = data["preferences"].get(mkey, {})
+        aktive  = sum(1 for v in data["volunteers"].values() if v.get("active", True))
+        st.info(f"{len(prefs_m)}/{aktive} aktive frivillige har indsendt onsker.")
+        return
 
-    checked: list[str] = []
-    cols = st.columns(4)
-    for i, d_str in enumerate(alle_datoer):
-        with cols[i % 4]:
-            if st.checkbox(fmt_dato(d_str), value=d_str in valgte, key=f"dc_{mk}_{d_str}"):
-                checked.append(d_str)
+    alle        = all_vagtdates(ar, mdr)
+    current_set = set(cfg.get("dates", alle))
+
+    st.markdown("**Vaelg aktive vagtdatoer** (Man/Tirs/Ons/Son er aktive som standard):")
+    selected = render_setup_calendar(mkey, current_set)
 
     st.divider()
     c3, c4, c5 = st.columns(3)
-    min_per = c3.number_input("Min. frivillige pr. vagt", 1, 10,
-                               existing.get("min_per_shift", 1))
-    min_sel = c4.number_input("Min. ønsker pr. frivillig", 1, 20,
-                               existing.get("min_selections", 5))
-    frigivet = c5.checkbox("Frigiv til frivillige", existing.get("released", False))
+    min_per = c3.number_input("Min. frivillige/vagt", 1, 10, cfg.get("min_per_shift", 1))
+    max_per = c4.number_input("Max. frivillige/vagt", 1, 20, cfg.get("max_per_shift", 5))
+    min_sel = c5.number_input("Min. onsker/frivillig", 1, 20, cfg.get("min_selections", 5))
 
-    if st.button("💾 Gem opsætning", type="primary"):
-        data["monthly_config"][mk] = {
-            "dates": sorted(checked),
+    cs, cr = st.columns(2)
+    if cs.button("Gem opstaetning (ikke frigivet endnu)", use_container_width=True):
+        data["monthly_config"][mkey] = {
+            "dates": selected,
             "min_per_shift": int(min_per),
+            "max_per_shift": int(max_per),
             "min_selections": int(min_sel),
-            "released": frigivet,
+            "released": False,
         }
-        save_data(data)
-        st.success(f"✅ Opsætning for {MÅNEDER_DK[int(mdr)]} {int(år)} gemt!")
+        save(data)
+        st.success(f"Opstaetning for {MANEDER[mdr]} {ar} gemt.")
 
-    # Hvem har indsendt
-    if mk in data.get("preferences", {}):
-        indsendt = len(data["preferences"][mk])
-        aktive = sum(1 for v in data["volunteers"].values() if v.get("active"))
-        st.info(f"📊 **{indsendt}/{aktive}** aktive frivillige har indsendt ønsker.")
+    if cr.button("Frigiv til frivillige", type="primary", use_container_width=True):
+        if not selected:
+            st.error("Vaelg mindst een dato inden du frigiver.")
+        else:
+            data["monthly_config"][mkey] = {
+                "dates": selected,
+                "min_per_shift": int(min_per),
+                "max_per_shift": int(max_per),
+                "min_selections": int(min_sel),
+                "released": True,
+            }
+            save(data)
+            st.success(f"{MANEDER[mdr]} {ar} er nu frigivet til de frivillige!")
+            st.rerun()
+
+    prefs_m = data["preferences"].get(mkey, {})
+    aktive  = sum(1 for v in data["volunteers"].values() if v.get("active", True))
+    if aktive:
+        st.info(f"{len(prefs_m)}/{aktive} aktive frivillige har indsendt onsker.")
 
 
-def tab_tildeling(data: dict):
+def _tab_tildeling(data: dict):
     st.subheader("Automatisk vagttildeling")
 
-    frigivne = sorted(mk for mk, c in data["monthly_config"].items() if c.get("released"))
+    frigivne = sorted(k for k, c in data["monthly_config"].items() if c.get("released"))
     if not frigivne:
-        st.warning("Ingen måneder er frigivet endnu.")
+        st.warning("Ingen maaneder er frigivet endnu.")
         return
 
-    valgt_mk = st.selectbox("Vælg måned", frigivne, format_func=month_label)
-    prefs_data = data["preferences"].get(valgt_mk, {})
-    aktive = {vid: v for vid, v in data["volunteers"].items() if v.get("active")}
-
-    indsendt = len(prefs_data)
-    total = len(aktive)
+    mkey    = st.selectbox("Vaelg maaned", frigivne, format_func=mk_label)
+    prefs_m = data["preferences"].get(mkey, {})
+    aktive  = {vid: v for vid, v in data["volunteers"].items() if v.get("active", True)}
 
     c1, c2 = st.columns(2)
-    c1.metric("Har indsendt ønsker", f"{indsendt}/{total}")
+    c1.metric("Har indsendt onsker", f"{len(prefs_m)}/{len(aktive)}")
 
-    # Vis status per frivillig
     col_ja, col_nej = st.columns(2)
     with col_ja:
-        st.markdown("**Klar ✅**")
+        st.markdown("**Klar:**")
         for vid, v in aktive.items():
-            if vid in prefs_data:
-                n = sum(1 for p in prefs_data[vid].values() if p == "sikker")
-                m = sum(1 for p in prefs_data[vid].values() if p == "måske")
-                st.write(f"• {v['name']} *(sikker: {n}, måske: {m})*")
+            if vid in prefs_m:
+                s  = sum(1 for p in prefs_m[vid].values() if p == "sikker")
+                ms = sum(1 for p in prefs_m[vid].values() if p == "maske")
+                st.write(f"- {v['name']}  (Ja: {s} / Maske: {ms})")
     with col_nej:
-        st.markdown("**Mangler ❌**")
+        st.markdown("**Mangler:**")
         for vid, v in aktive.items():
-            if vid not in prefs_data:
-                st.write(f"• {v['name']}")
+            if vid not in prefs_m:
+                st.write(f"- {v['name']}")
 
     st.divider()
+    if mkey in data.get("assignments", {}):
+        st.warning("Vagter er allerede tildelt — klik nedenfor for at kore forfra.")
 
-    allerede = valgt_mk in data.get("assignments", {})
-    if allerede:
-        st.warning("⚠️ Vagter er allerede tildelt – klik nedenfor for at køre igen og overskrive.")
-
-    if st.button("🚀 Tildel vagter automatisk", type="primary", disabled=indsendt == 0):
-        data = auto_assign(data, valgt_mk)
-        save_data(data)
-        st.success("✅ Vagter tildelt!")
-        st.rerun()
-
-    if indsendt == 0:
-        st.error("Ingen frivillige har indsendt ønsker endnu.")
+    if st.button("Tildel vagter automatisk", type="primary"):
+        if not prefs_m:
+            st.error("Ingen frivillige har indsendt onsker endnu.")
+        else:
+            data = auto_assign(data, mkey)
+            save(data)
+            st.success("Vagter er tildelt!")
+            st.rerun()
 
 
-def tab_resultater(data: dict):
+def _tab_resultater(data: dict):
     st.subheader("Resultater")
 
-    tildelte = list(data.get("assignments", {}).keys())
+    tildelte = sorted(data.get("assignments", {}).keys(), reverse=True)
     if not tildelte:
-        st.info("Ingen vagter tildelt endnu.")
+        st.info("Ingen vagter er tildelt endnu.")
         return
 
-    valgt_mk = st.selectbox("Vælg måned", sorted(tildelte, reverse=True), format_func=month_label)
-    assignment = data["assignments"][valgt_mk]
+    mkey = st.selectbox("Vaelg maaned", tildelte, format_func=mk_label)
+    asgn = data["assignments"][mkey]
     vols = data["volunteers"]
-    config = data["monthly_config"].get(valgt_mk, {})
 
-    st.caption(f"Genereret: {assignment.get('generated_at', '–')}")
+    st.caption(f"Genereret: {asgn.get('generated_at', '–')}")
 
-    # Nøgletal
-    åbne = len(assignment["open"])
-    lukkede = len(assignment["closed"])
-    total = åbne + lukkede
-    pct = round(100 * åbne / total) if total > 0 else 0
+    aabne   = len(asgn["open"])
+    lukkede = len(asgn["closed"])
+    total   = aabne + lukkede
+    pct     = round(100 * aabne / total) if total > 0 else 0
 
     c1, c2, c3 = st.columns(3)
-    c1.metric("🟢 Åbningsdage", åbne)
-    c2.metric("🔴 Lukkedage", lukkede)
-    c3.metric("Åbningsprocent", f"{pct}%")
+    c1.metric("Aabningsdage",    aabne)
+    c2.metric("Lukkedage",       lukkede)
+    c3.metric("Aabningsprocent", f"{pct}%")
 
-    if assignment.get("unmet_quota"):
-        with st.expander("⚠️ Frivillige med ufyldt kvote"):
-            for vid, mangler in assignment["unmet_quota"].items():
-                navn = vols.get(vid, {}).get("name", vid)
-                st.write(f"• **{navn}** mangler **{mangler}** vagt(er)")
+    if asgn.get("unmet_quota"):
+        with st.expander("Frivillige med ufyldt kvote"):
+            for vid, mangler in asgn["unmet_quota"].items():
+                st.write(f"- **{vols.get(vid, {}).get('name', vid)}** mangler {mangler} vagt(er)")
 
-    t_kal, t_vol, t_csv = st.tabs(["📅 Kalender-oversigt", "👤 Per frivillig", "⬇️ Eksport"])
+    st.markdown("### Kalender-oversigt")
+    st.markdown(cal_html_results(mkey, asgn["shifts"], asgn["open"], vols), unsafe_allow_html=True)
 
-    with t_kal:
-        dates = config.get("dates", sorted(assignment["shifts"].keys()))
-        for d_str in sorted(dates):
-            er_åben = d_str in assignment["open"]
-            vagthavende = assignment["shifts"].get(d_str, [])
-            navne = [vols[vid]["name"] for vid in vagthavende if vid in vols]
-
-            c_dato, c_status, c_navne = st.columns([2, 1, 4])
-            c_dato.write(fmt_dato(d_str))
-            if er_åben:
-                c_status.markdown('<span class="status-open">Åben</span>', unsafe_allow_html=True)
-            else:
-                c_status.markdown('<span class="status-closed">Lukket</span>', unsafe_allow_html=True)
-            c_navne.write(", ".join(navne) if navne else "—")
-
-    with t_vol:
+    with st.expander("Oversigt per frivillig"):
         for vid, vol in sorted(vols.items(), key=lambda x: x[1]["name"]):
             if not vol.get("active"):
                 continue
-            mine = sorted(d for d, vs in assignment["shifts"].items() if vid in vs)
-            krævet = vol.get("required_shifts", 4)
-            fik = len(mine)
-            label = f"{vol['name']}  —  {fik}/{krævet} vagter"
-            with st.expander(label):
-                if mine:
-                    for d in mine:
-                        st.write(f"• {fmt_dato(d)}")
-                else:
-                    st.write("Ingen vagter tildelt.")
-                if fik < krævet:
-                    st.warning(f"Fik {krævet - fik} færre vagt(er) end aftalt.")
+            mine   = sorted(d for d, vs in asgn["shifts"].items() if vid in vs)
+            kraevet = vol.get("required_shifts", 2)
+            st.markdown(f"**{vol['name']}** — {len(mine)}/{kraevet} vagter")
+            for d in mine:
+                st.write(f"  - {fmt(d)}")
 
-    with t_csv:
-        st.markdown("**Download oversigt som CSV**")
-        rows = []
-        for d_str in sorted(assignment["shifts"].keys()):
-            vagthavende = assignment["shifts"].get(d_str, [])
-            navne = "; ".join(vols[vid]["name"] for vid in vagthavende if vid in vols)
-            status = "Åben" if d_str in assignment["open"] else "Lukket"
-            rows.append(f"{fmt_dato(d_str)},{status},{navne}")
+    rakker = ["Dato,Status,Frivillige"]
+    for d in sorted(asgn["shifts"]):
+        navne  = "; ".join(vols[v]["name"] for v in asgn["shifts"][d] if v in vols)
+        status = "Aben" if d in asgn["open"] else "Lukket"
+        rakker.append(f"{fmt(d)},{status},{navne}")
 
-        csv_tekst = "Dato,Status,Frivillige\n" + "\n".join(rows)
-        st.download_button(
-            "⬇️ Download CSV",
-            data=csv_tekst.encode("utf-8-sig"),
-            file_name=f"plexus_vagtplan_{valgt_mk}.csv",
-            mime="text/csv",
-        )
+    st.download_button(
+        "Download CSV",
+        "\n".join(rakker).encode("utf-8-sig"),
+        f"plexus_vagtplan_{mkey}.csv",
+        "text/csv",
+    )
 
-
-# ── Hoved-app ──────────────────────────────────────────────────────────────
-
+# ══════════════════════════════════════════════════════════════════════════════
+#  MAIN
+# ══════════════════════════════════════════════════════════════════════════════
 def main():
-    st.markdown(CSS, unsafe_allow_html=True)
-    data = load_data()
+    st.set_page_config(page_title="Plexus Vagtplan", page_icon="", layout="wide")
+    st.markdown(
+        """
+        <style>
+        .block-container { padding-top: 1.8rem; }
+        div[data-testid="stMetric"] {
+            background: #f0f4f8; border-radius: 8px; padding: 12px 16px;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    data = load()
 
     with st.sidebar:
-        st.markdown("## 📅 Plexus Vagtplan")
+        st.markdown("## Plexus Vagtplan")
         st.divider()
-        side = st.radio(
-            "Navigation",
-            ["🙋 Frivillig portal", "⚙️ Administrator"],
-            label_visibility="hidden",
-        )
+        side = st.radio("", ["Frivillig", "Administrator"], label_visibility="hidden")
+        st.divider()
+        st.caption(f"Version {VERSION}")
+        st.caption("Lavet af Fabian Salvatore")
 
-    if side == "🙋 Frivillig portal":
+    if side == "Frivillig":
         side_frivillig(data)
     else:
         side_admin(data)
