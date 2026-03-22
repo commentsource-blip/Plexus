@@ -538,9 +538,8 @@ def _html_thead() -> str:
     cells = "".join(
         f'<th style="padding:10px 4px;font-size:12px;font-weight:700;'
         f'letter-spacing:0.5px;border:1px solid #e0e0e0;'
-        f'background:{"#f0f7ff" if i in VAGTDAG_IDX else "#f9f9f9"};'
-        f'color:{"#1565c0" if i in VAGTDAG_IDX else "#bbb"};'
-        f'border-bottom:3px solid {"#1565c0" if i in VAGTDAG_IDX else "#e0e0e0"}">'
+        f'background:#f0f7ff;color:#1565c0;'
+        f'border-bottom:3px solid #1565c0">'
         f'{DAG_LANG[i]}</th>'
         for i in range(7))
     return f"<thead><tr>{cells}</tr></thead>"
@@ -623,9 +622,9 @@ def cal_html_resultater(mkey, shifts, open_days, closed_days, activity_days,
                 navne = [(v, vols[v]["name"]) for v in shifts.get(d_str, []) if v in vols]
 
                 if volunteer_view:
-                    # Frivillige ser ikke hvem der er tildelt på lukkede dage
+                    # Frivillige ser ikke hvem der er tildelt, men får besked om årsagen
                     body_html = ('<div style="font-size:10px;color:#c62828;'
-                                 'margin-top:4px;font-style:italic">Lukket</div>')
+                                 'margin-top:4px;font-style:italic">Lukket – for få frivillige</div>')
                 else:
                     # Admin ser tildelingerne (selv om dagen lukker)
                     body_html = (
@@ -1076,7 +1075,7 @@ def _tab_frivillige(data: dict):
 
     h1, h2, h3, h4, _ = st.columns([3, 1, 1, 1, 1])
     h1.markdown("**Navn**")
-    h2.markdown("**Vgt/md.**")
+    h2.markdown("**Vagt/mdr**")
     h3.markdown("**Aktiv**")
     h4.markdown("**Akt.udv.**")
     st.markdown("---")
