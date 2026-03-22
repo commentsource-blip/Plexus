@@ -813,48 +813,50 @@ def side_frivillig(data: dict):
 
 
 def _vis_vagtplan(data: dict, vid: str, vol: dict, mkey: str):
-    asgn      = data["assignments"].get(mkey, {})
+    asgn = data["assignments"].get(mkey, {})
     if not asgn:
         st.warning("Ingen vagtplan fundet for denne måned.")
         return
 
     shifts    = asgn.get("shifts", {})
-    open_days = asgn.get("open", [])
-    activity  = asgn.get("activity", [])
+    open_days = asgn.get("open", [])          # alle dage med ≥ min_per frivillige
+    activity  = asgn.get("activity", [])      # åbne dage der er aktivitetsdage (subset af open)
+    closed_all = asgn.get("closed", [])       # bruges til kalenderfarver
 
-    # Lukkedage = konfigurerede åbne/aktivitetsdage der IKKE fik nok frivillige.
-    # Vi bruger configured_open hvis tilgængeligt; ellers fallback til open+closed.
+    # Lukkedage til METRIK = konfigurerede planlagte dage der IKKE åbnede.
+    # Vi bruger configured_open (gemt af algoritmen) — det er kun de dage
+    # admin satte til OPEN eller ACTIVITY i opsætningen. Aldrig hele måneden.
     configured_open = asgn.get("configured_open", None)
     if configured_open is not None:
-        open_set_cfg = set(configured_open)
         lukkede_dage = [d for d in configured_open if d not in set(open_days)]
     else:
-        # Bagudkompatibel: brug closed-listen men fjern rene setup-lukkede dage
-        lukkede_dage = [d for d in asgn.get("closed", []) if d in (asgn.get("shifts", {}))]
+        # Bagudkompatibel: lukkede dage der faktisk havde tildelinger
+        lukkede_dage = [d for d in closed_all if d in shifts]
 
-    # Mine vagter — kun vis dem der er på åbne dage (frivillig-visning)
+    # Mine vagter — frivillig ser kun vagter på åbne dage
+    open_set       = set(open_days)
     my_all_shifts  = sorted(d for d, vs in shifts.items() if vid in vs)
-    my_open_shifts = [d for d in my_all_shifts if d in set(open_days)]
+    my_open_shifts = [d for d in my_all_shifts if d in open_set]
 
-    kraevet      = vol.get("required_shifts", 2)
-    åbne         = len(open_days)
-    aktivit      = len(activity)
-    lukkede      = len(lukkede_dage)
-    total_cfg    = åbne + lukkede
-    pct          = round(100 * åbne / total_cfg) if total_cfg > 0 else 0
+    kraevet   = vol.get("required_shifts", 2)
+    åbne      = len(open_days)
+    aktivit   = len(activity)
+    lukkede   = len(lukkede_dage)
+    total_cfg = åbne + lukkede
+    pct       = round(100 * åbne / total_cfg) if total_cfg > 0 else 0
 
     c1, c2, c3 = st.columns(3)
-    c1.metric("✅ Dine vagter",   f"{len(my_open_shifts)}/{kraevet}")
-    c2.metric("🟢 Åbningsdage",   åbne,
+    c1.metric("✅ Dine vagter",  f"{len(my_open_shifts)}/{kraevet}")
+    c2.metric("🟢 Åbningsdage",  åbne,
               delta=f"heraf {aktivit} aktivitet" if aktivit else None, delta_color="off")
-    c3.metric("📈 Åbningspct.",   f"{pct}%",
+    c3.metric("📈 Åbningspct.",  f"{pct}%",
               delta=f"{lukkede} lukket" if lukkede else None, delta_color="inverse")
 
     st.markdown("### 📅 Vagtplan")
-    # volunteer_view=True: lukkedage viser ikke navne
+    # volunteer_view=True: dage uden nok frivillige viser ikke navne
     st.markdown(
         cal_html_resultater(
-            mkey, shifts, open_days, closed, activity,
+            mkey, shifts, open_days, closed_all, activity,
             data["volunteers"], highlight_vid=vid, volunteer_view=True),
         unsafe_allow_html=True)
 
