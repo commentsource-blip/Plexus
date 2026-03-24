@@ -48,6 +48,33 @@ div[data-testid="stTabs"] button[data-baseweb="tab"]{
 .stButton>button[kind="primary"]{
     background:linear-gradient(135deg,#1565c0,#0d47a1) !important;
     border:none !important;color:white !important}
+
+/* ── Mørkt tema (dark mode) ────────────────────────────────────────────────── */
+html[data-theme="dark"] div[data-testid="stMetric"]{
+    background:linear-gradient(135deg,#0d2137,#0d2618) !important;
+    border-color:#2a3a4a !important}
+html[data-theme="dark"] div[data-testid="stMetric"] label{
+    color:#7fa8c0 !important}
+
+/* Grå lukket-celler (ikke-valgbare vagtdage) */
+html[data-theme="dark"] .plexus-grey-cell{
+    background:#252525 !important;border-color:#383838 !important;color:#555 !important}
+html[data-theme="dark"] .plexus-grey-cell > div{color:#555 !important}
+
+/* Dæmpede ikke-vagtdage */
+html[data-theme="dark"] .plexus-dim-cell{
+    background:#1c1c1c !important;border-color:#262626 !important;color:#404040 !important}
+html[data-theme="dark"] .plexus-dim-cell > div{color:#404040 !important}
+
+/* HTML-resultat-kalender */
+html[data-theme="dark"] .plexus-calendar thead th{
+    background:#0d1a2e !important;border-color:#1a2a3e !important;color:#5a9fd4 !important}
+html[data-theme="dark"] .plexus-calendar .plexus-cal-empty{
+    background:#161616 !important;border-color:#222 !important}
+html[data-theme="dark"] .plexus-calendar .plexus-cal-planned-closed{
+    background:#202020 !important;border-color:#303030 !important}
+html[data-theme="dark"] .plexus-calendar .plexus-cal-planned-closed div{
+    color:#555 !important}
 </style>
 """
 
@@ -77,34 +104,117 @@ div[data-testid="stMarkdownContainer"]:has(.cal-overlay-cell)
 </style>
 """
 
-# ── Data ──────────────────────────────────────────────────────────────────────
-def load() -> dict:
-    """Indlæs data fra JSON-fil. Returnerer tomt datasæt ved fejl."""
-    if os.path.exists(DATA_FILE):
-        try:
-            with open(DATA_FILE, "r", encoding="utf-8") as f:
-                raw = json.load(f)
-            # Sikr at alle nøglefelter findes
-            raw.setdefault("volunteers", {})
-            raw.setdefault("monthly_config", {})
-            raw.setdefault("preferences", {})
-            raw.setdefault("assignments", {})
-            raw.setdefault("admin_password", "plexus2024")
-            raw.setdefault("next_id", 1)
-            return raw
-        except (json.JSONDecodeError, OSError):
-            st.error("⚠️ Datafilen er beskadiget. Starter med tomt datasæt.")
+# ── Persistent storage ────────────────────────────────────────────────────────
+#
+# På streamlit.app er filsystemet IKKE persistent — plexus_data.json slettes
+# ved hver reboot/redeploy. Løsning: brug Google Sheets som database.
+#
+# OPSÆTNING (engangsstep — ca. 10 min):
+#  1. Gå til console.cloud.google.com → opret projekt
+#     → aktiver "Google Sheets API" + "Google Drive API"
+#  2. Opret Service Account → download JSON-nøgle
+#  3. Opret et Google Sheet (fx "Plexus Vagtplan Data")
+#     → del det med Service Account-e-mailen som Redaktør
+#  4. Tilføj dette til .streamlit/secrets.toml (lokalt)
+#     eller Streamlit Cloud → App settings → Secrets:
+#
+#       [gcp_service_account]
+#       type = "service_account"
+#       project_id = "dit-projekt"
+#       private_key_id = "..."
+#       private_key = "-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----\n"
+#       client_email = "din-service-account@dit-projekt.iam.gserviceaccount.com"
+#       client_id = "..."
+#       auth_uri = "https://accounts.google.com/o/oauth2/auth"
+#       token_uri = "https://oauth2.googleapis.com/token"
+#       auth_provider_x509_cert_url = "https://www.googleapis.com/oauth2/v1/certs"
+#       client_x509_cert_url = "..."
+#
+#       [plexus]
+#       gsheet_name = "Plexus Vagtplan Data"
+#
+# Uden secrets bruges lokal JSON-fil (velegnet til lokal udvikling).
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _use_sheets() -> bool:
+    """Returnerer True hvis Google Sheets-credentials er konfigureret."""
+    try:
+        return "gcp_service_account" in st.secrets
+    except Exception:
+        return False
+
+
+@st.cache_resource
+def _gsheets_client():
+    """Returnerer autentificeret gspread-klient (cachet — opretter kun forbindelse én gang)."""
+    try:
+        import gspread
+        from google.oauth2.service_account import Credentials
+    except ImportError:
+        st.error("❌ Mangler pakker: kør `pip install gspread google-auth`")
+        st.stop()
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive",
+    ]
+    creds = Credentials.from_service_account_info(
+        st.secrets["gcp_service_account"], scopes=scopes)
+    import gspread
+    return gspread.authorize(creds)
+
+
+def _sheets_worksheet():
+    """Åbner det konfigurerede Google Sheet (første ark)."""
+    client     = _gsheets_client()
+    sheet_name = st.secrets.get("plexus", {}).get("gsheet_name", "Plexus Vagtplan Data")
+    return client.open(sheet_name).sheet1
+
+
+def _empty_data() -> dict:
     return {"volunteers": {}, "monthly_config": {}, "preferences": {},
             "assignments": {}, "admin_password": "plexus2024", "next_id": 1}
 
 
+def load() -> dict:
+    """Indlæs data — fra Google Sheets hvis konfigureret, ellers lokal JSON."""
+    raw = {}
+    if _use_sheets():
+        try:
+            ws  = _sheets_worksheet()
+            val = ws.cell(1, 1).value
+            if val:
+                raw = json.loads(val)
+        except Exception as e:
+            st.error(f"⚠️ Kunne ikke hente data fra Google Sheets: {e}")
+            raw = {}
+    elif os.path.exists(DATA_FILE):
+        try:
+            with open(DATA_FILE, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            st.error("⚠️ Datafilen er beskadiget. Starter med tomt datasæt.")
+            raw = {}
+
+    defaults = _empty_data()
+    for k, v in defaults.items():
+        raw.setdefault(k, v)
+    return raw
+
+
 def save(data: dict):
-    """Gem data til JSON-fil med fejlhåndtering."""
-    try:
-        with open(DATA_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-    except OSError as e:
-        st.error(f"❌ Kunne ikke gemme data: {e}")
+    """Gem data — til Google Sheets hvis konfigureret, ellers lokal JSON."""
+    if _use_sheets():
+        try:
+            ws = _sheets_worksheet()
+            ws.update_cell(1, 1, json.dumps(data, ensure_ascii=False))
+        except Exception as e:
+            st.error(f"❌ Kunne ikke gemme data til Google Sheets: {e}")
+    else:
+        try:
+            with open(DATA_FILE, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except OSError as e:
+            st.error(f"❌ Kunne ikke gemme data: {e}")
 
 
 def mk(y, m) -> str:
@@ -216,7 +326,7 @@ def _colored_cell(bg, border, text, dag, day, maan, status, overlay=False):
 def _grey_cell_nobutton(dag, day, maan, label=""):
     """Grå celle UDEN knap — vises for ikke-valgbare dage."""
     st.markdown(
-        f'<div style="background:#f0f0f0;border:1px dashed #ccc;'
+        f'<div class="plexus-grey-cell" style="background:#f0f0f0;border:1px dashed #ccc;'
         f'border-radius:10px;padding:8px 4px 6px;text-align:center;'
         f'min-height:84px;color:#bbb">'
         f'<div style="font-size:9px;font-weight:700;text-transform:uppercase">{dag}</div>'
@@ -229,7 +339,7 @@ def _grey_cell_nobutton(dag, day, maan, label=""):
 def _non_vagtdag_cell(dag, day, maan):
     """Meget lys celle for dage der ikke er vagtdage (Tor/Fre/Lør)."""
     st.markdown(
-        f'<div style="background:#fafafa;border:1px solid #f0f0f0;'
+        f'<div class="plexus-dim-cell" style="background:#fafafa;border:1px solid #f0f0f0;'
         f'border-radius:10px;padding:8px 4px 6px;text-align:center;'
         f'min-height:84px;color:#ddd">'
         f'<div style="font-size:9px;font-weight:700;text-transform:uppercase;'
@@ -574,7 +684,7 @@ def cal_html_resultater(mkey, shifts, open_days, closed_days, activity_days,
         rows += "<tr>"
         for i, day in enumerate(week):
             if day == 0:
-                rows += ('<td style="background:#fafafa;border:1px solid #ececec;'
+                rows += ('<td class="plexus-cal-empty" style="background:#fafafa;border:1px solid #ececec;'
                          'padding:6px;min-width:100px"></td>')
                 continue
             d_str = date(y, m, day).isoformat()
@@ -647,7 +757,7 @@ def cal_html_resultater(mkey, shifts, open_days, closed_days, activity_days,
 
             else:
                 # ── Planlagt lukket (sat til CLOSED i opsætningen) ───
-                rows += (f'<td style="background:#f5f5f5;border:1px solid #e0e0e0;'
+                rows += (f'<td class="plexus-cal-planned-closed" style="background:#f5f5f5;border:1px solid #e0e0e0;'
                          f'padding:8px 5px;vertical-align:top;min-width:100px;opacity:0.6">'
                          f'<div style="font-size:10px;font-weight:700;color:#9e9e9e">{DAG_LANG[i]}</div>'
                          f'<div style="font-size:22px;font-weight:900;color:#bdbdbd;line-height:1">{day}</div>'
@@ -657,7 +767,7 @@ def cal_html_resultater(mkey, shifts, open_days, closed_days, activity_days,
 
         rows += "</tr>"
 
-    return (f'<div style="overflow-x:auto;border-radius:12px;border:1px solid #e0e0e0;overflow:hidden">'
+    return (f'<div class="plexus-calendar" style="overflow-x:auto;border-radius:12px;border:1px solid #e0e0e0;overflow:hidden">'
             f'<table style="border-collapse:collapse;width:100%;table-layout:fixed">'
             + _html_thead() + f"<tbody>{rows}</tbody></table></div>")
 
@@ -833,7 +943,7 @@ def side_frivillig(data: dict):
 
     vol = data["volunteers"][vid]
 
-    st.markdown('<div style="margin-top:30px"></div>', unsafe_allow_html=True)
+    st.markdown('<div style="margin-top:20px"></div>', unsafe_allow_html=True)
     col_h, col_b = st.columns([5, 1])
     col_h.markdown(f"## 👋 Hej, {vol['name']}!")
     if col_b.button("← Skift", use_container_width=True, key="skift_btn"):
