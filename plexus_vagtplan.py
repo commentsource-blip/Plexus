@@ -4,7 +4,7 @@ Plexus Vagtplan
 Lavet af Fabian Salvatore
 """
 import streamlit as st
-import json, os, calendar
+import json, os, calendar, time
 from datetime import date, datetime, timedelta
 
 VERSION     = date.today().strftime("%d.%m.%Y")
@@ -170,13 +170,35 @@ def _sheets_worksheet():
     return client.open(sheet_name).sheet1
 
 
+SAVE_COOLDOWN  = 60    # minimum sekunder mellem Sheets-skrivninger
+LOAD_INTERVAL  = 3600  # genindlæs fra Sheets maks én gang i timen
+
+
 def _empty_data() -> dict:
     return {"volunteers": {}, "monthly_config": {}, "preferences": {},
             "assignments": {}, "admin_password": "plexus2024", "next_id": 1}
 
 
+@st.cache_resource
+def _sync_state():
+    """Delt hukommelse på tværs af alle sessioner — lever så længe appen kører."""
+    return {
+        "data":      None,
+        "last_load": 0.0,
+        "last_save": 0.0,
+        "pending":   False,   # True = ændringer venter på at blive skrevet
+    }
+
+
 def load() -> dict:
-    """Indlæs data — fra Google Sheets hvis konfigureret, ellers lokal JSON."""
+    """Indlæs data — fra cache hvis frisk, ellers fra Sheets / lokal fil."""
+    state = _sync_state()
+    now   = time.time()
+
+    # Brug cache hvis den er frisk (under LOAD_INTERVAL sekunder gammel)
+    if state["data"] is not None and (now - state["last_load"]) < LOAD_INTERVAL:
+        return state["data"]
+
     raw = {}
     if _use_sheets():
         try:
@@ -184,9 +206,10 @@ def load() -> dict:
             val = ws.cell(1, 1).value
             if val:
                 raw = json.loads(val)
+            state["last_load"] = now
         except Exception as e:
             st.error(f"⚠️ Kunne ikke hente data fra Google Sheets: {e}")
-            raw = {}
+            raw = state["data"] or {}
     elif os.path.exists(DATA_FILE):
         try:
             with open(DATA_FILE, "r", encoding="utf-8") as f:
@@ -198,17 +221,34 @@ def load() -> dict:
     defaults = _empty_data()
     for k, v in defaults.items():
         raw.setdefault(k, v)
+
+    state["data"] = raw
     return raw
 
 
 def save(data: dict):
-    """Gem data — til Google Sheets hvis konfigureret, ellers lokal JSON."""
+    """Gem data — altid i hukommelsen, og til Sheets hvis cooldown er udløbet."""
+    state = _sync_state()
+    now   = time.time()
+    state["data"] = data  # opdater cache med det samme uanset hvad
+
     if _use_sheets():
-        try:
-            ws = _sheets_worksheet()
-            ws.update_cell(1, 1, json.dumps(data, ensure_ascii=False))
-        except Exception as e:
-            st.error(f"❌ Kunne ikke gemme data til Google Sheets: {e}")
+        tid_siden_sidst = now - state["last_save"]
+        if tid_siden_sidst >= SAVE_COOLDOWN:
+            # Cooldown udløbet — skriv til Sheets nu
+            try:
+                ws = _sheets_worksheet()
+                ws.update_cell(1, 1, json.dumps(data, ensure_ascii=False))
+                state["last_save"] = now
+                state["pending"]   = False
+            except Exception as e:
+                st.warning(f"⚠️ Kunne ikke gemme til Google Sheets: {e}")
+                state["pending"] = True
+        else:
+            # For tidligt — gem kun i hukommelsen og vis besked
+            state["pending"] = True
+            venter = int(SAVE_COOLDOWN - tid_siden_sidst)
+            st.toast(f"💾 Gemt lokalt — synkroniserer om ~{venter}s", icon="⏳")
     else:
         try:
             with open(DATA_FILE, "w", encoding="utf-8") as f:
