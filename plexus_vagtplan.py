@@ -41,7 +41,7 @@ div[data-testid="stMetric"]{
     border-radius:12px;padding:14px 18px;border:1px solid #e0e0e0}
 div[data-testid="stMetric"] label{font-size:12px !important;color:#607d8b !important}
 div[data-testid="stMetric"] [data-testid="stMetricValue"]{
-    font-size:28px !important;font-weight:800 !important}
+    font-size:28px !important;font-weight:800 !important;color:#1a237e !important}
 div[data-testid="stTabs"] button[data-baseweb="tab"]{
     font-size:14px !important;font-weight:600 !important;padding:8px 18px !important}
 .stButton>button{border-radius:10px !important;font-weight:500 !important}
@@ -55,6 +55,20 @@ html[data-theme="dark"] div[data-testid="stMetric"]{
     border-color:#2a3a4a !important}
 html[data-theme="dark"] div[data-testid="stMetric"] label{
     color:#7fa8c0 !important}
+html[data-theme="dark"] div[data-testid="stMetric"] [data-testid="stMetricValue"]{
+    color:#e8f5e9 !important}
+html[data-theme="dark"] div[data-testid="stMetric"] [data-testid="stMetricDelta"]{
+    color:#90caf9 !important}
+
+/* Fallback via prefers-color-scheme hvis data-theme ikke sættes */
+@media (prefers-color-scheme: dark) {
+    div[data-testid="stMetric"]{
+        background:linear-gradient(135deg,#0d2137,#0d2618) !important;
+        border-color:#2a3a4a !important}
+    div[data-testid="stMetric"] label{color:#7fa8c0 !important}
+    div[data-testid="stMetric"] [data-testid="stMetricValue"]{color:#e8f5e9 !important}
+    div[data-testid="stMetric"] [data-testid="stMetricDelta"]{color:#90caf9 !important}
+}
 
 /* Grå lukket-celler (ikke-valgbare vagtdage) */
 html[data-theme="dark"] .plexus-grey-cell{
@@ -66,7 +80,9 @@ html[data-theme="dark"] .plexus-dim-cell{
     background:#1c1c1c !important;border-color:#262626 !important;color:#404040 !important}
 html[data-theme="dark"] .plexus-dim-cell > div{color:#404040 !important}
 
-/* HTML-resultat-kalender */
+/* HTML-resultat-kalender — åbne/aktivitetsdage */
+html[data-theme="dark"] .plexus-calendar td{
+    border-color:#333 !important}
 html[data-theme="dark"] .plexus-calendar thead th{
     background:#0d1a2e !important;border-color:#1a2a3e !important;color:#5a9fd4 !important}
 html[data-theme="dark"] .plexus-calendar .plexus-cal-empty{
@@ -75,6 +91,28 @@ html[data-theme="dark"] .plexus-calendar .plexus-cal-planned-closed{
     background:#202020 !important;border-color:#303030 !important}
 html[data-theme="dark"] .plexus-calendar .plexus-cal-planned-closed div{
     color:#555 !important}
+/* Tving læsbare tekstfarver i alle kalender-celler ved mørkt tema */
+html[data-theme="dark"] .plexus-calendar td div{
+    color:inherit}
+html[data-theme="dark"] .plexus-calendar td[style*="background:#e8f5e9"] div,
+html[data-theme="dark"] .plexus-calendar td[style*="background:#dbeafe"] div,
+html[data-theme="dark"] .plexus-calendar td[style*="background:#ffebee"] div{
+    color:#111 !important}
+html[data-theme="dark"] .plexus-calendar td[style*="background:#e8f5e9"]{
+    background:#1b3a1f !important}
+html[data-theme="dark"] .plexus-calendar td[style*="background:#dbeafe"]{
+    background:#0d2347 !important}
+html[data-theme="dark"] .plexus-calendar td[style*="background:#ffebee"]{
+    background:#3a1010 !important}
+html[data-theme="dark"] .plexus-calendar td[style*="background:#e8f5e9"] div,
+html[data-theme="dark"] .plexus-calendar td[style*="background:#1b3a1f"] div{
+    color:#a5d6a7 !important}
+html[data-theme="dark"] .plexus-calendar td[style*="background:#dbeafe"] div,
+html[data-theme="dark"] .plexus-calendar td[style*="background:#0d2347"] div{
+    color:#90caf9 !important}
+html[data-theme="dark"] .plexus-calendar td[style*="background:#ffebee"] div,
+html[data-theme="dark"] .plexus-calendar td[style*="background:#3a1010"] div{
+    color:#ef9a9a !important}
 </style>
 """
 
@@ -935,9 +973,11 @@ def side_frivillig(data: dict):
     st.markdown('<div style="margin-top:20px"></div>', unsafe_allow_html=True)
     col_h, col_b = st.columns([5, 1])
     col_h.markdown(f"## 👋 Hej, {vol['name']}!")
-    if col_b.button("← Skift", use_container_width=True, key="skift_btn"):
-        st.session_state.vol_id = None
-        st.rerun()
+    with col_b:
+        st.markdown('<div style="height:28px"></div>', unsafe_allow_html=True)
+        if st.button("← Skift", use_container_width=True, key="skift_btn"):
+            st.session_state.vol_id = None
+            st.rerun()
     st.divider()
 
     released = {k for k, c in data["monthly_config"].items() if c.get("released")}
@@ -1112,9 +1152,11 @@ def side_admin(data: dict):
         st.session_state.admin_ok = False
     if not st.session_state.admin_ok:
         st.markdown("## 🔒 Administratorlogin")
-        pwd = st.text_input("Adgangskode", type="password",
-                            placeholder="Skriv adgangskode...")
-        if st.button("🔓 Log ind", type="primary", key="login_btn"):
+        with st.form("login_form"):
+            pwd = st.text_input("Adgangskode", type="password",
+                                placeholder="Skriv adgangskode og tryk Enter...")
+            submitted = st.form_submit_button("🔓 Log ind", type="primary")
+        if submitted:
             if pwd == data.get("admin_password", "plexus2024"):
                 st.session_state.admin_ok = True
                 st.rerun()
@@ -1125,9 +1167,11 @@ def side_admin(data: dict):
     st.markdown('<div style="margin-top:20px"></div>', unsafe_allow_html=True)
     col_h, col_b = st.columns([5, 1])
     col_h.markdown("## ⚙️ Administration")
-    if col_b.button("🚪 Log ud", use_container_width=True, key="logout_btn"):
-        st.session_state.admin_ok = False
-        st.rerun()
+    with col_b:
+        st.markdown('<div style="height:28px"></div>', unsafe_allow_html=True)
+        if st.button("🚪 Log ud", use_container_width=True, key="logout_btn"):
+            st.session_state.admin_ok = False
+            st.rerun()
 
     t1, t2, t3, t4 = st.tabs(
         ["👥 Frivillige", "📅 Måneds-opsætning", "⚡ Vagttildeling", "📊 Resultater"])
