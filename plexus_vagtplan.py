@@ -153,7 +153,7 @@ def load() -> dict:
     if _use_supabase():
         try:
             client = _supabase_client()
-            res = client.table("app_data").select("value").eq("key", "plexus").execute()
+            res = client.table("app_data").select("value").eq("record_key", "plexus").execute()
             if res.data:
                 raw = json.loads(res.data[0]["value"])
         except Exception as e:
@@ -179,9 +179,9 @@ def save(data: dict):
         try:
             client = _supabase_client()
             # Slet eksisterende række og indsæt ny — virker uden primary key
-            client.table("app_data").delete().eq("key", "plexus").execute()
+            client.table("app_data").delete().eq("record_key", "plexus").execute()
             client.table("app_data").insert(
-                {"key": "plexus", "value": json.dumps(data, ensure_ascii=False)}
+                {"record_key": "plexus", "value": json.dumps(data, ensure_ascii=False)}
             ).execute()
         except Exception as e:
             st.error(f"❌ Kunne ikke gemme data til Supabase: {e}")
