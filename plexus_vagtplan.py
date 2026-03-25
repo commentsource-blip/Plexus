@@ -104,13 +104,13 @@ div[data-testid="stMarkdownContainer"]:has(.cal-overlay-cell)
 </style>
 """
 
-# ── Persistent storage via Supabase ──────────────────────────────────────────
+# ── Persistent storage via Supabase REST API ─────────────────────────────────
 #
 # OPSÆTNING:
 #  1. Opret gratis projekt på supabase.com
 #  2. Opret tabel "app_data" med kolonner:
-#       key   (text, primary key)
-#       value (text)
+#       record_key  (text, primary key)
+#       value       (text)
 #  3. Tilføj til Streamlit Cloud → App settings → Secrets:
 #
 #       [supabase]
@@ -128,18 +128,19 @@ def _use_supabase() -> bool:
         return False
 
 
-@st.cache_resource
-def _supabase_client():
-    """Returnerer Supabase-klient (cachet — opretter kun forbindelse én gang)."""
-    try:
-        from supabase import create_client
-    except ImportError:
-        st.error("❌ Mangler pakke: tilføj `supabase` til requirements.txt")
-        st.stop()
-    url = st.secrets["supabase"]["url"]
+def _sb_headers() -> dict:
     key = st.secrets["supabase"]["key"]
-    from supabase import create_client
-    return create_client(url, key)
+    return {
+        "apikey":        key,
+        "Authorization": f"Bearer {key}",
+        "Content-Type":  "application/json",
+        "Prefer":        "return=minimal",
+    }
+
+
+def _sb_url(path: str = "") -> str:
+    base = st.secrets["supabase"]["url"].rstrip("/")
+    return f"{base}/rest/v1/app_data{path}"
 
 
 def _empty_data() -> dict:
@@ -149,13 +150,20 @@ def _empty_data() -> dict:
 
 def load() -> dict:
     """Indlæs data — fra Supabase hvis konfigureret, ellers lokal JSON."""
+    import requests
     raw = {}
     if _use_supabase():
         try:
-            client = _supabase_client()
-            res = client.table("app_data").select("value").eq("record_key", "plexus").execute()
-            if res.data:
-                raw = json.loads(res.data[0]["value"])
+            r = requests.get(
+                _sb_url(),
+                headers=_sb_headers(),
+                params={"record_key": "eq.plexus", "select": "value"},
+                timeout=10,
+            )
+            r.raise_for_status()
+            rows = r.json()
+            if rows:
+                raw = json.loads(rows[0]["value"])
         except Exception as e:
             st.error(f"⚠️ Kunne ikke hente data fra Supabase: {e}")
             raw = {}
@@ -175,14 +183,19 @@ def load() -> dict:
 
 def save(data: dict):
     """Gem data — til Supabase hvis konfigureret, ellers lokal JSON."""
+    import requests
     if _use_supabase():
         try:
-            client = _supabase_client()
-            # Slet eksisterende række og indsæt ny — virker uden primary key
-            client.table("app_data").delete().eq("record_key", "plexus").execute()
-            client.table("app_data").insert(
-                {"record_key": "plexus", "value": json.dumps(data, ensure_ascii=False)}
-            ).execute()
+            headers = _sb_headers()
+            headers["Prefer"] = "resolution=merge-duplicates"
+            r = requests.post(
+                _sb_url(),
+                headers=headers,
+                json={"record_key": "plexus",
+                      "value": json.dumps(data, ensure_ascii=False)},
+                timeout=10,
+            )
+            r.raise_for_status()
         except Exception as e:
             st.error(f"❌ Kunne ikke gemme data til Supabase: {e}")
     else:
