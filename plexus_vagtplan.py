@@ -618,7 +618,7 @@ def auto_assign(data: dict, mkey: str, locked_shifts: dict | None = None) -> dic
         ({d for d in active_d if d not in open_set})
         | ({d for d, t in dt.items() if t == CLOSED})
     )
-    activity_d = sorted(d for d in open_set if is_act_day(d))
+    activity_d: list = []   # aktivitetsdage håndteres nu manuelt af admin
 
     # Uopfyldt kvote beregnes KUN ud fra åbne dage.
     # Vagter på lukkede dage (for få frivillige) tæller ikke.
@@ -1326,7 +1326,7 @@ def _tab_opstaetning(data: dict):
 
     st.markdown(
         "**Klik på en dato for at skifte type:**  \n"
-        "🟢 **Åben** → 🔵 **Aktivitet** → 🔴 **Lukket** → 🟢 ...  \n"
+        "🟢 **Åben** → 🔴 **Lukket** → 🟢 ...  \n"
         "*(Man/Tirs/Ons/Søn er åbne som standard)*")
     st.markdown("")
     selected = render_setup_kalender(mkey)
@@ -1433,7 +1433,9 @@ def _tab_tildeling(data: dict):
                 st.write(f"• {v['name']}")
 
     # ── Manuel forhåndstildeling af aktivitetsfrivillige ─────────────────────
-    if akt_vols:
+    allerede = mkey in data.get("assignments", {})
+
+    if akt_vols and not allerede:
         st.markdown("---")
         st.markdown("### 🔵 Manuel tildeling af aktivitetsfrivillige")
         st.caption(
@@ -1545,7 +1547,6 @@ def _tab_tildeling(data: dict):
 
     # ── Automatisk tildeling ──────────────────────────────────────────────────
     st.markdown("---")
-    allerede = mkey in data.get("assignments", {})
 
     def _do_assign():
         locked_shifts = st.session_state.get(f"locked_{mkey}", {})
