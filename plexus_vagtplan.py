@@ -22,9 +22,8 @@ MÅN_GEN   = ["","januar","februar","marts","april","maj","juni",
 OPEN="open"; CLOSED="closed"; ACTIVITY="activity"
 SETUP_CYCLE = {OPEN:CLOSED, CLOSED:OPEN}
 SETUP_STYLE = {
-    OPEN:     ("#c8e6c9","#43a047","#1b5e20","🟢","Åben"),
-    CLOSED:   ("#ffcdd2","#e53935","#b71c1c","🔴","Lukket"),
-    ACTIVITY: ("#c8e6c9","#43a047","#1b5e20","🟢","Åben"),  # bagudkompatibel — behandles som OPEN
+    OPEN:   ("#c8e6c9","#43a047","#1b5e20","🟢","Åben"),
+    CLOSED: ("#ffcdd2","#e53935","#b71c1c","🔴","Lukket"),
 }
 PREF_CYCLE  = {"":"sikker","sikker":"måske","måske":""}
 PREF_STYLE  = {
@@ -324,42 +323,42 @@ def latest_assigned_month(data: dict) -> str | None:
 
 
 # ── Kalender-hjælpere ─────────────────────────────────────────────────────────
-def _dag_header(border_color: str, text_color: str):
+def _dag_header():
+    """Tabelagtig ugedag-header — matcher HTML-kalenderens thead."""
     cols = st.columns(7)
     for i in range(7):
-        is_vd = i in VAGTDAG_IDX
         cols[i].markdown(
-            f'<div style="text-align:center;font-size:11px;font-weight:700;'
-            f'padding:5px 0;letter-spacing:0.5px;text-transform:uppercase;'
-            f'border-bottom:3px solid {"" if not is_vd else border_color};'
-            f'color:{text_color if is_vd else "#ccc"}">'
-            f'{DAG_LANG[i][:3]}</div>', unsafe_allow_html=True)
+            f'<div style="text-align:center;font-size:12px;font-weight:700;'
+            f'padding:10px 4px;letter-spacing:0.5px;'
+            f'background:#f0f7ff;color:#1565c0;'
+            f'border:1px solid #e0e0e0;border-bottom:3px solid #1565c0">'
+            f'{DAG_LANG[i]}</div>', unsafe_allow_html=True)
 
 
 def _colored_cell(bg, border, text, dag, day, maan, status, overlay=False):
     cls = ' class="cal-overlay-cell"' if overlay else ''
     st.markdown(
-        f'<div{cls} style="background:{bg};border:2px solid {border};'
-        f'border-radius:10px;padding:8px 4px 6px;text-align:center;'
-        f'min-height:84px">'
-        f'<div style="font-size:9px;font-weight:700;color:{text};'
+        f'<div{cls} style="background:{bg};border:1px solid {border};'
+        f'border-top:3px solid {border};'
+        f'padding:8px 5px;vertical-align:top;min-height:90px">'
+        f'<div style="font-size:10px;font-weight:700;color:{text};'
         f'text-transform:uppercase;letter-spacing:0.4px">{dag}</div>'
-        f'<div style="font-size:26px;font-weight:900;color:{text};line-height:1.1">{day}</div>'
-        f'<div style="font-size:9px;color:{text};opacity:0.8">{maan}</div>'
-        f'<div style="font-size:11px;font-weight:600;color:{text};margin-top:3px">{status}</div>'
+        f'<div style="font-size:22px;font-weight:900;color:{text};line-height:1">{day}</div>'
+        f'<div style="font-size:9px;color:{text};opacity:0.8;margin-bottom:2px">{maan}</div>'
+        f'<div style="font-size:11px;font-weight:600;color:{text}">{status}</div>'
         f'</div>', unsafe_allow_html=True)
 
 
 def _grey_cell_nobutton(dag, day, maan, label=""):
     """Grå celle UDEN knap — vises for ikke-valgbare dage."""
     st.markdown(
-        f'<div class="plexus-grey-cell" style="background:#f0f0f0;border:1px dashed #ccc;'
-        f'border-radius:10px;padding:8px 4px 6px;text-align:center;'
-        f'min-height:84px;color:#bbb">'
-        f'<div style="font-size:9px;font-weight:700;text-transform:uppercase">{dag}</div>'
-        f'<div style="font-size:26px;font-weight:900;line-height:1.1">{day}</div>'
-        f'<div style="font-size:9px;opacity:0.8">{maan}</div>'
-        f'<div style="font-size:11px;margin-top:3px">{label}</div>'
+        f'<div class="plexus-grey-cell" style="background:#f5f5f5;border:1px solid #e0e0e0;'
+        f'padding:8px 5px;vertical-align:top;'
+        f'min-height:90px;color:#bbb;opacity:0.6">'
+        f'<div style="font-size:10px;font-weight:700;text-transform:uppercase">{dag}</div>'
+        f'<div style="font-size:22px;font-weight:900;line-height:1">{day}</div>'
+        f'<div style="font-size:9px;opacity:0.8;margin-bottom:2px">{maan}</div>'
+        f'<div style="font-size:10px;margin-top:3px">{label}</div>'
         f'</div>', unsafe_allow_html=True)
 
 
@@ -367,11 +366,11 @@ def _non_vagtdag_cell(dag, day, maan):
     """Meget lys celle for dage der ikke er vagtdage (Tor/Fre/Lør)."""
     st.markdown(
         f'<div class="plexus-dim-cell" style="background:#fafafa;border:1px solid #f0f0f0;'
-        f'border-radius:10px;padding:8px 4px 6px;text-align:center;'
-        f'min-height:84px;color:#ddd">'
-        f'<div style="font-size:9px;font-weight:700;text-transform:uppercase;'
+        f'padding:8px 5px;vertical-align:top;'
+        f'min-height:90px;color:#ddd">'
+        f'<div style="font-size:10px;font-weight:700;text-transform:uppercase;'
         f'letter-spacing:0.4px">{dag}</div>'
-        f'<div style="font-size:26px;font-weight:900;line-height:1.1">{day}</div>'
+        f'<div style="font-size:22px;font-weight:900;line-height:1">{day}</div>'
         f'<div style="font-size:9px;opacity:0.8">{maan}</div>'
         f'</div>', unsafe_allow_html=True)
 
@@ -795,7 +794,7 @@ def render_setup_kalender(mkey: str) -> dict:
                                  else default_date_types(y, m))
 
     st.markdown(OVERLAY_CAL_CSS, unsafe_allow_html=True)
-    _dag_header("#2e7d32", "#2e7d32")
+    _dag_header()
     for week in calendar.monthcalendar(y, m):
         cols = st.columns(7)
         for i, day in enumerate(week):
@@ -805,10 +804,6 @@ def render_setup_kalender(mkey: str) -> dict:
                     continue
                 d_str = date(y, m, day).isoformat()
                 state = st.session_state[sk].get(d_str, CLOSED)
-                # Bagudkompatibel: gamle ACTIVITY-dage vises som OPEN
-                if state == ACTIVITY:
-                    state = OPEN
-                    st.session_state[sk][d_str] = OPEN
                 if state not in SETUP_CYCLE:
                     state = CLOSED
                 bg, border, text, icon, label = SETUP_STYLE[state]
@@ -842,14 +837,7 @@ def render_pref_kalender(mkey: str, vid: str, date_types: dict, existing: dict) 
     rel_set = {d for d, t in date_types.items() if t in (OPEN, ACTIVITY)}
 
     st.markdown(OVERLAY_CAL_CSS, unsafe_allow_html=True)
-    # Dag-header: vis alle 7 dage neutralt — enhver dag kan være åben i opsætningen
-    cols_h = st.columns(7)
-    for i in range(7):
-        cols_h[i].markdown(
-            f'<div style="text-align:center;font-size:11px;font-weight:700;'
-            f'padding:5px 0;letter-spacing:0.5px;text-transform:uppercase;'
-            f'border-bottom:3px solid #1565c0;color:#1565c0">'
-            f'{DAG_LANG[i][:3]}</div>', unsafe_allow_html=True)
+    _dag_header()
 
     for week in calendar.monthcalendar(y, m):
         cols = st.columns(7)
@@ -859,7 +847,7 @@ def render_pref_kalender(mkey: str, vid: str, date_types: dict, existing: dict) 
                     _empty_cell()
                     continue
                 d_str   = date(y, m, day).isoformat()
-                cfg_typ = date_types.get(d_str)   # OPEN, CLOSED, ACTIVITY eller None
+                cfg_typ = date_types.get(d_str)
 
                 if cfg_typ in (OPEN, ACTIVITY):
                     # Valgbar dag — klik overalt på cellen
@@ -1401,18 +1389,20 @@ def _tab_opstaetning(data: dict):
 # ── Tab: Vagttildeling ─────────────────────────────────────────────────────────
 def _tab_tildeling(data: dict):
     st.markdown("### ⚡ Vagttildeling")
-    frigivne = sorted(k for k, c in data["monthly_config"].items()
-                      if c.get("released", False))
+    frigivne = sorted((k for k, c in data["monthly_config"].items()
+                       if c.get("released", False)), reverse=True)
     if not frigivne:
         st.warning("📭 Ingen måneder er frigivet endnu.")
         return
 
-    default_idx = len(frigivne) - 1
-    mkey    = st.selectbox("Vælg måned", frigivne, index=default_idx,
+    mkey    = st.selectbox("Vælg måned", frigivne, index=0,
                            format_func=mk_label, key="tildeling_month_select")
     prefs_m = data["preferences"].get(mkey, {})
     aktive  = {vid: v for vid, v in data["volunteers"].items() if v.get("active", True)}
-    akt_vols = {vid: v for vid, v in aktive.items() if v.get("aktivitetsudvalg")}
+    akt_vols = dict(sorted(
+        ((vid, v) for vid, v in aktive.items() if v.get("aktivitetsudvalg")),
+        key=lambda x: x[1]["name"]
+    ))
 
     c1, c2 = st.columns(2)
     c1.metric("📋 Indsendte ønsker", f"{len(prefs_m)}/{len(aktive)}")
@@ -1461,13 +1451,7 @@ def _tab_tildeling(data: dict):
         else:
             # Kalender-header
             st.markdown(OVERLAY_CAL_CSS, unsafe_allow_html=True)
-            cols_h = st.columns(7)
-            for i in range(7):
-                cols_h[i].markdown(
-                    f'<div style="text-align:center;font-size:11px;font-weight:700;'
-                    f'padding:5px 0;letter-spacing:0.5px;text-transform:uppercase;'
-                    f'border-bottom:3px solid #1565c0;color:#1565c0">'
-                    f'{DAG_LANG[i][:3]}</div>', unsafe_allow_html=True)
+            _dag_header()
 
             for week in calendar.monthcalendar(y_m, m_m):
                 cols = st.columns(7)
@@ -1479,7 +1463,7 @@ def _tab_tildeling(data: dict):
                         d_str = date(y_m, m_m, day).isoformat()
                         if d_str not in open_days_m:
                             # Lukket dag — vis grå
-                            _grey_cell_nobutton(DAG_LANG[i][:3], day, MÅN_GEN[m_m][:3], "📅 Lukket")
+                            _grey_cell_nobutton(DAG_LANG[i], day, MÅN_GEN[m_m][:3], "📅 Lukket")
                             continue
 
                         dag_locked = locked.get(d_str, [])
@@ -1508,24 +1492,25 @@ def _tab_tildeling(data: dict):
                                     f'border-radius:4px;background:#fff9c4;color:#6d4c00">'
                                     f'🟡 {v["name"]}</div>')
 
-                        bg = "#e3f2fd" if dag_locked else "#f8f9fa"
-                        border = "#1e88e5" if dag_locked else "#dee2e6"
+                        bg = "#e3f2fd" if dag_locked else "#fafafa"
+                        border = "#1e88e5" if dag_locked else "#e0e0e0"
                         text_c = "#0d47a1" if dag_locked else "#555"
                         st.markdown(
-                            f'<div class="cal-overlay-cell" style="border:2px solid {border};'
-                            f'border-radius:8px;padding:6px 5px;background:{bg};'
+                            f'<div class="cal-overlay-cell" style="border:1px solid {border};'
+                            f'border-top:3px solid {border};'
+                            f'padding:8px 5px;background:{bg};'
                             f'min-height:90px;margin-bottom:2px">'
-                            f'<div style="font-size:10px;font-weight:700;color:{text_c}">{DAG_LANG[i][:3]}</div>'
-                            f'<div style="font-size:20px;font-weight:900;color:{text_c};line-height:1">{day}</div>'
+                            f'<div style="font-size:10px;font-weight:700;color:{text_c}">{DAG_LANG[i]}</div>'
+                            f'<div style="font-size:22px;font-weight:900;color:{text_c};line-height:1">{day}</div>'
                             f'<div style="font-size:9px;color:{text_c};margin-bottom:3px">{MÅN_GEN[m_m][:3]}</div>'
                             f'{navne_html}{oensker_html}</div>',
                             unsafe_allow_html=True)
 
-                        # Knapper under cellen — vælg hvilken frivillig der låses
-                        avail_for_lock = [
-                            vid for vid in akt_vols
-                            if vid not in dag_locked
-                        ]
+                        # Knapper under cellen — vælg hvilken frivillig der låses (alfabetisk)
+                        avail_for_lock = sorted(
+                            [vid for vid in akt_vols if vid not in dag_locked],
+                            key=lambda v: aktive[v]["name"]
+                        )
                         if avail_for_lock:
                             valgt = st.selectbox(
                                 "Tilføj",
