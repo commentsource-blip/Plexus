@@ -430,33 +430,21 @@ def _empty_cell():
 # ── Fordelingsalgoritme ───────────────────────────────────────────────────────
 def auto_assign(data: dict, mkey: str, locked_shifts: dict | None = None) -> dict:
     """
-    TRE-FASE VAGTTILDELING
-    ══════════════════════
+    FIRE-FASE VAGTTILDELING
+    ═══════════════════════
 
     Prioriteter (højest → lavest):
-      1. Flest mulige åbne dage  (≥ min_per frivillige tildelt)
-      2. Jævn SPREDNING af åbningsdage over måneden
-         — dage langt fra allerede-åbne dage prioriteres
-      3. Ja-præferencer (sikker) > Måske-præferencer > Ingen præference
-      4. Ligelig fordeling af vagter (ingen bør have 0 mens andre har mange)
-      5. Respektér min_per og max_per per vagt
+      1.  Låste vagter (admin) indsættes først og er ikke til forhandling
+      2.  Flest mulige åbningsdage (≥ min_per frivillige tildelt)
+      3.  Hverdage (Man/Tirs/Ons) foretrækkes over weekender (Søn)
+      4.  Jævn spredning over måneden (isolerede dage prioriteres)
+      5.  Frivilligpræference: Ja > Måske > Indsendt-men-ikke-her > Ingen ønsker
+      6.  Ligelig fordeling af vagter
 
-    locked_shifts: {d_str: [vid, ...]} — admin-forhåndsvalgte vagter der
-      pre-populeres og tæller med i kvoterne inden automatisk fordeling.
-
-    Fase 1 – Åbningsoptimering med spredning (kun præference-frivillige):
-      Behandl dage iterativt. Sorteringsrækkefølge: farthest-first (størst
-      afstand til nærmeste allerede-åbne dag), derefter hårdest-first.
-      Gentag gennemgang indtil ingen fremskridt.
-
-    Fase 2 – Kvotefordeling + hjælp til åbning:
-      Frivillige med resterende kvote tildeles dag-for-dag.
-      Spredning indgår: når en frivillig kan åbne en ny dag, foretrækkes
-      dage langt fra allerede-åbne dage.
-
-    Fase 3 – Nødpass uden præferencekrav:
-      Resterende lukkede dage forsøges åbnet med frivillige uden præference.
-      Spredning styrer rækkefølgen: fjernest fra åbne dage først.
+    Fase 1  — Åbn dage med KUN ja-frivillige
+    Fase 2  — Åbn resterende dage, tilføj måske-frivillige
+    Fase 3  — Åbn resterende dage, tilføj alle (inkl. ingen ønsker)
+    Fase 4  — Fordel resterende kvoter til åbne dage
     """
     cfg      = data["monthly_config"].get(mkey, {})
     y, m     = int(mkey[:4]), int(mkey[5:7])
@@ -468,18 +456,16 @@ def auto_assign(data: dict, mkey: str, locked_shifts: dict | None = None) -> dic
     vols     = data["volunteers"]
     active   = [vid for vid, v in vols.items() if v.get("active", True)]
 
-    # Edge-case: ingen aktive dage eller frivillige
     if not active_d or not active:
         data["assignments"][mkey] = {
-            "shifts": {}, "open": [],
-            "closed": sorted(dt.keys()),
+            "shifts": {}, "open": [], "closed": sorted(dt.keys()),
             "activity": [], "unmet_quota": {},
             "generated_at": datetime.now().strftime("%d/%m/%Y %H:%M"),
         }
         return data
 
-    # Præference-matrix: 2 = sikker/ja, 1 = måske, 0 = ingen præference
-    prio: dict[str, dict[str, int]] = {
+    has_submitted: set = set(prefs_m.keys())
+    prio: dict = {
         vid: {
             d: (2 if prefs_m.get(vid, {}).get(d) == "sikker"
                 else 1 if prefs_m.get(vid, {}).get(d) == "måske"
@@ -491,12 +477,10 @@ def auto_assign(data: dict, mkey: str, locked_shifts: dict | None = None) -> dic
 
     quota     = {vid: max(0, int(vols[vid].get("required_shifts", 2))) for vid in active}
     remaining = dict(quota)
-    shifts: dict[str, list[str]] = {d: [] for d in active_d}
+    shifts: dict = {d: [] for d in active_d}
+    day_obj: dict = {d: date.fromisoformat(d) for d in active_d}
 
-    # Forudberegn dato-objekter én gang (bruges til afstandsberegning)
-    day_obj: dict[str, date] = {d: date.fromisoformat(d) for d in active_d}
-
-    # Pre-populer med admin-låste vagter og reducér kvoter tilsvarende
+    # ── Pre-populer låste vagter ─────────────────────────────────────────────
     if locked_shifts:
         for d, vids in locked_shifts.items():
             if d in shifts:
@@ -507,124 +491,88 @@ def auto_assign(data: dict, mkey: str, locked_shifts: dict | None = None) -> dic
 
     # ── Hjælpefunktioner ────────────────────────────────────────────────────
 
-    def eligible(vid: str, d: str, allow_no_pref: bool = False) -> bool:
-        """Kan vid tildeles dag d?"""
-        return (
-            vid not in shifts[d]
-            and remaining[vid] > 0
-            and len(shifts[d]) < max_per
-            and (allow_no_pref or prio[vid][d] > 0)
-        )
+    def vol_group(vid: str, d: str) -> int:
+        """0=ja, 1=måske, 2=indsendt-men-ikke-her, 3=ingen ønsker."""
+        p = prio[vid][d]
+        if p == 2: return 0
+        if p == 1: return 1
+        if vid in has_submitted: return 2
+        return 3
 
-    def candidate_score(vid: str, d: str) -> tuple:
-        """
-        Prioritetsnøgle — lav værdi = høj prioritet.
-        Præference først, derefter ligelig fordeling.
-        """
-        pref = 2 - prio[vid][d]   # 0=ja, 1=måske, 2=ingen
-        rem  = -remaining[vid]    # størst remaining = bedst
-        return (pref, rem)
+    def weekday_score(d: str) -> int:
+        """0=hverdag (Man/Tirs/Ons), 1=weekend (Søn). Hverdage prioriteres."""
+        return 0 if day_obj[d].weekday() in {0, 1, 2} else 1
 
     def _spread_score(d: str) -> int:
-        """
-        Afstand til nærmeste ANDEN allerede-åbne dag (d selv er altid ekskluderet).
-        Høj afstand = dag er isoleret = høj prioritet for spredning.
-        Bruges for ALLE dage (åbne og lukkede) i scoringsberegningen.
-
-        Specielle tilfælde:
-        - Ingen andre åbne dage endnu: foretrék dage tæt på midten af måneden,
-          så første åbningsdag lander centralt og maksimerer mulighed for
-          ligelig fordeling fremadrettet.
-        - Dag er udenfor active_d: returnér 0.
-        """
+        """Afstand til nærmeste ANDEN åbne dag. Højere = mere isoleret = bedre spredning."""
         open_others = [d2 for d2 in active_d
                        if d2 != d and len(shifts[d2]) >= min_per]
         if not open_others:
-            # Ingen andre åbne dage — favorér midten af måneden
             mid_idx = len(active_d) / 2.0
             try:
                 idx = active_d.index(d)
             except ValueError:
                 return 0
-            # Inverteret afstand til midten: stor = tæt på midten = god startdag
             return max(0, int((len(active_d) - abs(idx - mid_idx) * 2)))
-        d_obj = day_obj[d]
-        return min(abs((d_obj - day_obj[d2]).days) for d2 in open_others)
+        return min(abs((day_obj[d] - day_obj[d2]).days) for d2 in open_others)
 
-    def fill_day(d: str, allow_no_pref: bool = False) -> bool:
-        """
-        Forsøg at åbne dag d op til min_per.
-        Tildeler KUN hvis vi faktisk KAN nå min_per — ellers spildes ingen kvoter.
-        Returnerer True hvis dagen er åben (≥ min_per) bagefter.
-        """
+    def eligible_for(vid: str, d: str, max_group: int) -> bool:
+        return (vid not in shifts[d]
+                and remaining[vid] > 0
+                and len(shifts[d]) < max_per
+                and vol_group(vid, d) <= max_group)
+
+    def fill_day(d: str, max_group: int) -> bool:
+        """Åbn dag d op til min_per — commit'er KUN hvis nok kandidater."""
         if len(shifts[d]) >= min_per:
             return True
         cands = sorted(
-            [v for v in active if eligible(v, d, allow_no_pref)],
-            key=lambda v: candidate_score(v, d),
+            [v for v in active if eligible_for(v, d, max_group)],
+            key=lambda v: (vol_group(v, d), -remaining[v])
         )
         needed = min_per - len(shifts[d])
         if len(cands) < needed:
-            return False    # Ikke nok kandidater — gør INGENTING, bevar kvoter
-        for v in cands:
-            if len(shifts[d]) >= min_per:
-                break
+            return False
+        for v in cands[:needed]:
             shifts[d].append(v)
             remaining[v] -= 1
-        return len(shifts[d]) >= min_per
+        return True
+
+    def day_open_key(d: str) -> tuple:
+        """Sorteringsnøgle for lukkede dage: hverdage FØRST, derefter mest isoleret."""
+        return (weekday_score(d), -_spread_score(d))
+
+    def try_open_all(max_group: int):
+        """Iterer og åbn alle åbnelige dage — gentag indtil ingen fremskridt."""
+        changed = True
+        while changed:
+            changed = False
+            for d in sorted([d for d in active_d if len(shifts[d]) < min_per],
+                            key=day_open_key):
+                before = len(shifts[d])
+                if fill_day(d, max_group) and before < min_per:
+                    changed = True
 
     # ════════════════════════════════════════════════════════════════════════
-    # FASE 1 — Åbningsoptimering med spredning og præferencer
+    # FASE 1 — Åbn dage med KUN ja-frivillige
     # ════════════════════════════════════════════════════════════════════════
-    #
-    # Sorteringsrækkefølge per iteration:
-    #   Primær: størst afstand til nærmeste åbne dag (spredning)
-    #   Sekundær: færrest tilgængelige kandidater (sværhedsgrad)
-    # Iteration gentages så længe mindst én ny dag åbner.
-
-    prev_open = -1
-    while True:
-        open_now = sum(1 for d in active_d if len(shifts[d]) >= min_per)
-        if open_now == prev_open:
-            break
-        prev_open = open_now
-
-        def _n_eligible(d: str) -> int:
-            return sum(1 for v in active if eligible(v, d, False))
-
-        can_open = sorted(
-            [d for d in active_d
-             if len(shifts[d]) < min_per
-             and _n_eligible(d) >= (min_per - len(shifts[d]))],
-            key=lambda d: (-_spread_score(d), _n_eligible(d)),
-            #              ↑ mest isoleret FØRST (spredning)
-            #                                ↑ sværest som tiebreaker
-        )
-        for d in can_open:
-            fill_day(d, allow_no_pref=False)
+    try_open_all(max_group=0)
 
     # ════════════════════════════════════════════════════════════════════════
-    # FASE 2 — Kvotefordeling + hjælp til åbning med spredning
+    # FASE 2 — Åbn resterende dage: ja + måske
     # ════════════════════════════════════════════════════════════════════════
-    #
-    # Én frivillig tildeles ad gangen — den med FLEST resterende vagter.
-    #
-    # Prioritetsrækkefølge for dagvalg (lav score = høj prioritet):
-    #
-    #   Niveau A (opn) — åbningsstatus:
-    #     0 = dag åbner med præcis denne frivillig (gap == 1)
-    #     1 = dag er allerede åben
-    #     2 = dag mangler 2 (hjælp stadig nyttig)
-    #     3 = dag mangler 3+ (langt fra åbning)
-    #
-    #   Niveau B (spread) — spredning, gælder for ALLE dage:
-    #     -_spread_score(d): stor afstand til nærmeste ANDEN åbne dag
-    #     → isolerede dage prioriteres, uanset om de er åbne eller lukkede.
-    #     Dette sikrer at frivillige uden præferencer ikke alle
-    #     klumper på de tidligste allerede-åbne dage.
-    #
-    #   Niveau C (pref) — præference: 0=ja, 1=måske, 2=ingen
-    #   Niveau D (fill) — færreste allerede tildelt (lighed)
+    try_open_all(max_group=1)
+
+    # ════════════════════════════════════════════════════════════════════════
+    # FASE 3 — Åbn resterende dage: alle frivillige (inkl. ingen ønsker)
+    # ════════════════════════════════════════════════════════════════════════
+    try_open_all(max_group=3)
+
+    # ════════════════════════════════════════════════════════════════════════
+    # FASE 4 — Fordel resterende kvoter til åbne dage
+    # ════════════════════════════════════════════════════════════════════════
+    # Prioritet pr. dag: åben > hverdag > spredning > frivillig-gruppe > mindst fyldt
+    # Frivilligen med FLEST resterende vagter håndteres FØRST.
 
     total_remaining = sum(remaining.values())
     for _ in range(total_remaining * 2 + 1):
@@ -635,34 +583,30 @@ def auto_assign(data: dict, mkey: str, locked_shifts: dict | None = None) -> dic
 
         assigned = False
         for vid in vols_left:
-            best_d:     str | None   = None
-            best_score: tuple | None = None
+            best_d     = None
+            best_score = None
 
             for d in active_d:
-                if not eligible(vid, d, allow_no_pref=True):
+                if vid in shifts[d] or len(shifts[d]) >= max_per or remaining[vid] <= 0:
                     continue
 
+                is_open = len(shifts[d]) >= min_per
                 gap     = min_per - len(shifts[d])
-                is_open = gap <= 0
 
                 if not is_open:
-                    avail = sum(1 for v in active if eligible(v, d, True))
+                    avail = sum(1 for v in active
+                                if v not in shifts[d] and remaining[v] > 0
+                                and len(shifts[d]) < max_per)
                     if avail < gap:
                         continue
 
-                opn = (0 if gap == 1
-                       else 1 if is_open
-                       else 2 if gap == 2
-                       else 3)
+                opn   = 0 if is_open else 1          # åbne dage foretrækkes
+                wday  = weekday_score(d)
+                spr   = -_spread_score(d)             # isolerede dage foretrækkes
+                grp   = vol_group(vid, d)             # ja > måske > indsendt > ingen
+                fill  = len(shifts[d])                # mindst fyldt foretrækkes
 
-                # Spredning gælder for ALLE dage — isolerede dage foretrækkes
-                # uanset om de åbner en ny dag eller allerede er åbne.
-                spread = -_spread_score(d)
-
-                pref = 2 - prio[vid][d]
-                fill = len(shifts[d])
-
-                score = (opn, spread, pref, fill)
+                score = (opn, wday, spr, grp, fill)
                 if best_score is None or score < best_score:
                     best_score = score
                     best_d = d
@@ -677,56 +621,30 @@ def auto_assign(data: dict, mkey: str, locked_shifts: dict | None = None) -> dic
             break
 
     # ════════════════════════════════════════════════════════════════════════
-    # FASE 3 — Nødpass: åbn resterende dage uden præferencekrav
+    # KLASSIFICÉR OG GEM
     # ════════════════════════════════════════════════════════════════════════
-    #
-    # Spredning styrer rækkefølgen: fjernest fra allerede-åbne dage FØRST.
-    # fill_day afviser dage der ikke kan nå min_per — ingen spild.
-
-    still_closed = sorted(
-        [d for d in active_d if len(shifts[d]) < min_per],
-        key=lambda d: -_spread_score(d),   # mest isoleret FØRST
-    )
-    for d in still_closed:
-        fill_day(d, allow_no_pref=True)
-
-    # ════════════════════════════════════════════════════════════════════════
-    # KLASSIFICÉR DAGE OG GEM
-    # ════════════════════════════════════════════════════════════════════════
-
     open_set   = {d for d in active_d if len(shifts[d]) >= min_per}
     open_d     = sorted(open_set)
     closed_d   = sorted(
         ({d for d in active_d if d not in open_set})
         | ({d for d, t in dt.items() if t == CLOSED})
     )
-    activity_d: list = []   # aktivitetsdage håndteres nu manuelt af admin
-
-    # Uopfyldt kvote beregnes KUN ud fra åbne dage.
-    # Vagter på lukkede dage (for få frivillige) tæller ikke.
-    open_shifts = {
-        vid: sum(1 for d in open_set if vid in shifts[d])
-        for vid in active
-    }
-    unmet = {
-        vid: quota[vid] - open_shifts[vid]
-        for vid in active
-        if open_shifts[vid] < quota[vid]
-    }
+    open_shifts = {vid: sum(1 for d in open_set if vid in shifts[d]) for vid in active}
+    unmet = {vid: quota[vid] - open_shifts[vid]
+             for vid in active if open_shifts[vid] < quota[vid]}
 
     data["assignments"][mkey] = {
-        "shifts":              {d: lst for d, lst in shifts.items()},
-        "open":                open_d,
-        "closed":              closed_d,
-        "activity":            activity_d,
-        # Alle dage der var konfigureret som OPEN eller ACTIVITY i opsætningen.
-        # Bruges til korrekt beregning af lukkedage og åbningsprocent:
-        # vi tæller KUN dage der faktisk var planlagt åbne — ikke hele måneden.
-        "configured_open":     active_d,
-        "unmet_quota":         unmet,
-        "generated_at":        datetime.now().strftime("%d/%m/%Y %H:%M"),
+        "shifts":          {d: lst for d, lst in shifts.items()},
+        "open":            open_d,
+        "closed":          closed_d,
+        "activity":        [],
+        "configured_open": active_d,
+        "unmet_quota":     unmet,
+        "generated_at":    datetime.now().strftime("%d/%m/%Y %H:%M"),
     }
     return data
+
+
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1004,6 +922,48 @@ def side_frivillig(data: dict):
 
     if st.session_state.vol_id is None:
         st.markdown("## 📅 Plexus Vagtplan")
+
+        # ── Dagligt roterende meme ───────────────────────────────────────────
+        MEMES = [
+            ("https://api.memegen.link/images/fine/When_your_shift/starts_in_5_min.png",
+             "This is fine 🔥"),
+            ("https://api.memegen.link/images/doge/such_volunteer/very_shift.png",
+             "Wow 🐕"),
+            ("https://api.memegen.link/images/drake/Saying_no_to_the_shift/Showing_up_anyway.png",
+             "Drake approves 🙏"),
+            ("https://api.memegen.link/images/rollsafe/Cannot_miss_the_deadline/If_I_never_check_my_email.png",
+             "Galaxy brain 🧠"),
+            ("https://api.memegen.link/images/buzz/Volunteers_everywhere/Volunteers_everywhere.png",
+             "Buzz Lightyear ser det 👀"),
+            ("https://api.memegen.link/images/db/When_you_sign_up_for_one_shift/And_end_up_doing_three.png",
+             "Distracted boyfriend 😅"),
+            ("https://api.memegen.link/images/yuno/Why_not_sign_up/For_more_shifts~q.png",
+             "Y U NO 😤"),
+            ("https://api.memegen.link/images/aag/Shows_up_for_shift/Gets_free_coffee.png",
+             "Ancient aliens ☕"),
+            ("https://api.memegen.link/images/success/Remembered_to_submit/Shift_preferences.png",
+             "Success kid 🤜"),
+            ("https://api.memegen.link/images/facepalm/When_you_forget/To_submit_preferences.png",
+             "Picard facepalm 🤦"),
+            ("https://api.memegen.link/images/woman-cat/Me_yelling_about_my_schedule/The_schedule.png",
+             "Woman yelling at cat 😾"),
+            ("https://api.memegen.link/images/astronaut/Wait_it_is_my_shift/Always_has_been.png",
+             "Always has been 🚀"),
+            ("https://api.memegen.link/images/oprah/You_get_a_shift/And_you_get_a_shift.png",
+             "Oprah giver vagter 🎁"),
+            ("https://api.memegen.link/images/keepcalm/Keep_calm/And_show_up_for_your_shift.png",
+             "Keep calm 👑"),
+        ]
+        day_idx = date.today().timetuple().tm_yday % len(MEMES)
+        meme_url, meme_caption = MEMES[day_idx]
+        try:
+            col_m, col_r = st.columns([2, 3])
+            with col_m:
+                st.image(meme_url, caption=meme_caption, use_container_width=True)
+        except Exception:
+            pass   # Vis ikke fejl hvis billede ikke kan hentes
+        # ────────────────────────────────────────────────────────────────────
+
         st.markdown("### 👋 Hvem er du?")
         st.caption("Vælg dit navn for at se din vagtplan eller indsende ønsker.")
         if not active_vols:
@@ -1492,24 +1452,12 @@ def _tab_tildeling(data: dict):
 
     allerede = mkey in data.get("assignments", {})
 
-    # ── Allerede tildelt: vis vagtplan + "Omfordel vagter" ────────────────────
+    # ── Allerede tildelt: simpel visning + Omfordel vagter ────────────────────
     if allerede:
-        asgn       = data["assignments"][mkey]
-        shifts_a   = asgn.get("shifts", {})
-        open_days  = asgn.get("open", [])
-        closed_a   = asgn.get("closed", [])
-        activity_a = asgn.get("activity", [])
-        vols       = data["volunteers"]
-
-        st.markdown("### 📅 Udgivet vagtplan")
-        st.caption(f"⏱️ Genereret: {asgn.get('generated_at', '–')}")
-        st.markdown(
-            cal_html_resultater(mkey, shifts_a, open_days, closed_a, activity_a, vols,
-                                volunteer_view=False,
-                                configured_open=asgn.get("configured_open")),
-            unsafe_allow_html=True)
+        asgn = data["assignments"][mkey]
+        st.caption(f"⏱️ Vagtplan genereret: {asgn.get('generated_at', '–')}")
+        st.info("ℹ️ Vagter er allerede tildelt for denne måned. Se resultater under fanen 📊 Resultater.")
         st.markdown("---")
-        st.info("ℹ️ Vagter er allerede tildelt for denne måned.")
         if "confirm_reassign" not in st.session_state:
             st.session_state.confirm_reassign = None
         st.markdown('<div class="plexus-warn-btn"></div>', unsafe_allow_html=True)
@@ -1523,8 +1471,10 @@ def _tab_tildeling(data: dict):
                 if not prefs_m:
                     st.error("Ingen ønsker indsendt.")
                 else:
-                    locked_shifts = st.session_state.get(f"locked_{mkey}", {})
-                    data = auto_assign(data, mkey, locked_shifts=locked_shifts)
+                    # Ryd låste vagter og eksisterende tildeling for at sikre frisk beregning
+                    st.session_state.pop(f"locked_{mkey}", None)
+                    data["assignments"].pop(mkey, None)
+                    data = auto_assign(data, mkey, locked_shifts={})
                     save(data)
                     st.session_state.confirm_reassign = None
                     st.success("🎉 Vagter omfordelt!")
