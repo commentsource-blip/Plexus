@@ -435,24 +435,28 @@ def auto_assign(data: dict, mkey: str, locked_shifts: dict | None = None) -> dic
 
     Prioriteter (højest → lavest):
       1. Flest mulige åbne dage  (≥ min_per frivillige tildelt)
-      2. Ja-præferencer (sikker) > Måske-præferencer > Ingen præference
-      3. Ligelig fordeling af vagter (ingen bør have 0 mens andre har mange)
-      4. Respektér min_per og max_per per vagt
+      2. Jævn SPREDNING af åbningsdage over måneden
+         — dage langt fra allerede-åbne dage prioriteres
+      3. Ja-præferencer (sikker) > Måske-præferencer > Ingen præference
+      4. Ligelig fordeling af vagter (ingen bør have 0 mens andre har mange)
+      5. Respektér min_per og max_per per vagt
 
     locked_shifts: {d_str: [vid, ...]} — admin-forhåndsvalgte vagter der
       pre-populeres og tæller med i kvoterne inden automatisk fordeling.
 
-    Fase 1 – Åbningsoptimering (kun præference-frivillige):
-      Behandl dage iterativt, hårdest først (færrest villige = hårdest).
+    Fase 1 – Åbningsoptimering med spredning (kun præference-frivillige):
+      Behandl dage iterativt. Sorteringsrækkefølge: farthest-first (størst
+      afstand til nærmeste allerede-åbne dag), derefter hårdest-first.
       Gentag gennemgang indtil ingen fremskridt.
 
     Fase 2 – Kvotefordeling + hjælp til åbning:
       Frivillige med resterende kvote tildeles dag-for-dag.
-      En frivillig der KAN åbne en dag (mangler præcis den ene) prioriteres.
-      Vagter på dage der ender som lukkede tæller IKKE mod kvoten.
+      Spredning indgår: når en frivillig kan åbne en ny dag, foretrækkes
+      dage langt fra allerede-åbne dage.
 
     Fase 3 – Nødpass uden præferencekrav:
       Resterende lukkede dage forsøges åbnet med frivillige uden præference.
+      Spredning styrer rækkefølgen: fjernest fra åbne dage først.
     """
     cfg      = data["monthly_config"].get(mkey, {})
     y, m     = int(mkey[:4]), int(mkey[5:7])
@@ -489,6 +493,9 @@ def auto_assign(data: dict, mkey: str, locked_shifts: dict | None = None) -> dic
     remaining = dict(quota)
     shifts: dict[str, list[str]] = {d: [] for d in active_d}
 
+    # Forudberegn dato-objekter én gang (bruges til afstandsberegning)
+    day_obj: dict[str, date] = {d: date.fromisoformat(d) for d in active_d}
+
     # Pre-populer med admin-låste vagter og reducér kvoter tilsvarende
     if locked_shifts:
         for d, vids in locked_shifts.items():
@@ -512,20 +519,33 @@ def auto_assign(data: dict, mkey: str, locked_shifts: dict | None = None) -> dic
     def candidate_score(vid: str, d: str) -> tuple:
         """
         Prioritetsnøgle — lav værdi = høj prioritet.
-
-        Niveau 1 — Præference  (0 = ja, 1 = måske, 2 = ingen)
-        Niveau 2 — Flest resterende vagter foretrækkes (lighed)
+        Præference først, derefter ligelig fordeling.
         """
-        pref = 2 - prio[vid][d]          # 0=ja, 1=måske, 2=ingen
-        rem  = -remaining[vid]            # negativ → størst remaining = bedst
+        pref = 2 - prio[vid][d]   # 0=ja, 1=måske, 2=ingen
+        rem  = -remaining[vid]    # størst remaining = bedst
         return (pref, rem)
+
+    def _min_dist_to_open(d: str) -> int:
+        """
+        Minimum antal dage til nærmeste allerede-åbne dag.
+        Bruges til at sprede åbningsdage: høj afstand = høj prioritet.
+        Hvis ingen dage er åbne endnu, returneres afstand til midten af
+        den aktive dagliste, så den første åbningsdag lander centralt.
+        """
+        open_so_far = [d2 for d2 in active_d if len(shifts[d2]) >= min_per]
+        if not open_so_far:
+            # Ingen åbne dage endnu — foretrék dage tæt på midten af måneden
+            # (lille afstand til midten = højere prioritet, vi negerer senere)
+            mid_idx = len(active_d) / 2.0
+            idx     = active_d.index(d)
+            return int(abs(idx - mid_idx) * 100)   # skaleret for stabilitet
+        d_obj = day_obj[d]
+        return min(abs((d_obj - day_obj[d2]).days) for d2 in open_so_far)
 
     def fill_day(d: str, allow_no_pref: bool = False) -> bool:
         """
         Forsøg at åbne dag d op til min_per.
-
-        Kritisk: tildeler KUN hvis vi faktisk KAN nå min_per med de
-        tilgængelige kandidater — ellers spildes ingen kvoter.
+        Tildeler KUN hvis vi faktisk KAN nå min_per — ellers spildes ingen kvoter.
         Returnerer True hvis dagen er åben (≥ min_per) bagefter.
         """
         if len(shifts[d]) >= min_per:
@@ -545,18 +565,19 @@ def auto_assign(data: dict, mkey: str, locked_shifts: dict | None = None) -> dic
         return len(shifts[d]) >= min_per
 
     # ════════════════════════════════════════════════════════════════════════
-    # FASE 1 — Åbningsoptimering med præferencer
+    # FASE 1 — Åbningsoptimering med spredning og præferencer
     # ════════════════════════════════════════════════════════════════════════
     #
-    # Dage sorteres efter sværhedsgrad: færrest tilgængelige præference-
-    # kandidater = hårdest = FØRST. Iteration gentages så længe mindst én
-    # ny dag åbner pr. gennemgang.
+    # Sorteringsrækkefølge per iteration:
+    #   Primær: størst afstand til nærmeste åbne dag (spredning)
+    #   Sekundær: færrest tilgængelige kandidater (sværhedsgrad)
+    # Iteration gentages så længe mindst én ny dag åbner.
 
     prev_open = -1
     while True:
         open_now = sum(1 for d in active_d if len(shifts[d]) >= min_per)
         if open_now == prev_open:
-            break           # ingen fremskridt → stop
+            break
         prev_open = open_now
 
         def _n_eligible(d: str) -> int:
@@ -566,39 +587,39 @@ def auto_assign(data: dict, mkey: str, locked_shifts: dict | None = None) -> dic
             [d for d in active_d
              if len(shifts[d]) < min_per
              and _n_eligible(d) >= (min_per - len(shifts[d]))],
-            key=lambda d: _n_eligible(d),   # hårdest (færrest kandidater) FØRST
+            key=lambda d: (-_min_dist_to_open(d), _n_eligible(d)),
+            #              ↑ fjernest fra åbne dage FØRST (spredning)
+            #                                        ↑ sværest som tiebreaker
         )
         for d in can_open:
             fill_day(d, allow_no_pref=False)
 
     # ════════════════════════════════════════════════════════════════════════
-    # FASE 2 — Kvotefordeling + hjælp til åbning
+    # FASE 2 — Kvotefordeling + hjælp til åbning med spredning
     # ════════════════════════════════════════════════════════════════════════
     #
-    # Én frivillig tildeles ad gangen — den med FLEST resterende vagter
-    # for at sikre ligelig fordeling.
+    # Én frivillig tildeles ad gangen — den med FLEST resterende vagter.
     #
     # Prioritetsrækkefølge for dagvalg (lav score = høj prioritet):
     #
-    #   Niveau A — dagtype × akt.udvalg-match:
-    #     0 = aktivitetsdag OG frivillig er aktivitetsudvalg
-    #   Niveau A — åbningsstatus (opn):
+    #   Niveau A (opn) — åbningsstatus:
     #     0 = dag åbner med præcis denne frivillig (gap == 1)
     #     1 = dag er allerede åben
     #     2 = dag mangler 2 (hjælp stadig nyttig)
     #     3 = dag mangler 3+ (langt fra åbning)
     #
-    #   Niveau B — præference: 0=ja, 1=måske, 2=ingen
-    #   Niveau C — færreste allerede tildelt (fordel lighedsprincippet)
+    #   Niveau B (spread) — spredning (kun relevant for dage der åbner, opn=0):
+    #     Negeret afstand til nærmeste åbne dag — stor afstand = høj prioritet
     #
-    # Dage der aldrig kan åbnes springes over (ingen tilgængelige kandidater).
+    #   Niveau C (pref) — præference: 0=ja, 1=måske, 2=ingen
+    #   Niveau D (fill) — færreste allerede tildelt (lighed)
 
     total_remaining = sum(remaining.values())
     for _ in range(total_remaining * 2 + 1):
         vols_left = [v for v in active if remaining[v] > 0]
         if not vols_left:
             break
-        vols_left.sort(key=lambda v: -remaining[v])   # flest resterende FØRST
+        vols_left.sort(key=lambda v: -remaining[v])
 
         assigned = False
         for vid in vols_left:
@@ -609,25 +630,27 @@ def auto_assign(data: dict, mkey: str, locked_shifts: dict | None = None) -> dic
                 if not eligible(vid, d, allow_no_pref=True):
                     continue
 
-                gap     = min_per - len(shifts[d])   # ≤ 0 = allerede åben
+                gap     = min_per - len(shifts[d])
                 is_open = gap <= 0
 
-                # Spring over dage der aldrig kan åbnes
                 if not is_open:
                     avail = sum(1 for v in active if eligible(v, d, True))
                     if avail < gap:
                         continue
 
-                # Niveau A: åbningsstatus
                 opn = (0 if gap == 1
                        else 1 if is_open
                        else 2 if gap == 2
                        else 3)
 
-                pref  = 2 - prio[vid][d]    # 0=ja, 1=måske, 2=ingen
-                fill  = len(shifts[d])
+                # Sprednings-bonus: kun relevant når en ny dag kan åbnes (opn=0)
+                # Stor afstand til nærmeste åbne dag → lavere (bedre) score
+                spread = -_min_dist_to_open(d) if opn == 0 else 0
 
-                score = (opn, pref, fill)
+                pref = 2 - prio[vid][d]
+                fill = len(shifts[d])
+
+                score = (opn, spread, pref, fill)
                 if best_score is None or score < best_score:
                     best_score = score
                     best_d = d
@@ -636,7 +659,7 @@ def auto_assign(data: dict, mkey: str, locked_shifts: dict | None = None) -> dic
                 shifts[best_d].append(vid)
                 remaining[vid] -= 1
                 assigned = True
-                break   # Omstart med opdateret remaining-sortering
+                break
 
         if not assigned:
             break
@@ -645,12 +668,12 @@ def auto_assign(data: dict, mkey: str, locked_shifts: dict | None = None) -> dic
     # FASE 3 — Nødpass: åbn resterende dage uden præferencekrav
     # ════════════════════════════════════════════════════════════════════════
     #
-    # Tættest-på-åbning (flest allerede tildelt) FØRST.
+    # Spredning styrer rækkefølgen: fjernest fra allerede-åbne dage FØRST.
     # fill_day afviser dage der ikke kan nå min_per — ingen spild.
 
     still_closed = sorted(
         [d for d in active_d if len(shifts[d]) < min_per],
-        key=lambda d: -len(shifts[d]),   # tættest på åbning FØRST
+        key=lambda d: -_min_dist_to_open(d),   # fjernest fra åbne dage FØRST
     )
     for d in still_closed:
         fill_day(d, allow_no_pref=True)
