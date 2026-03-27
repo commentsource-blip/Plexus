@@ -20,11 +20,11 @@ MÅN_GEN   = ["","januar","februar","marts","april","maj","juni",
              "juli","august","september","oktober","november","december"]
 
 OPEN="open"; CLOSED="closed"; ACTIVITY="activity"
-SETUP_CYCLE = {OPEN:ACTIVITY, ACTIVITY:CLOSED, CLOSED:OPEN}
+SETUP_CYCLE = {OPEN:CLOSED, CLOSED:OPEN}
 SETUP_STYLE = {
     OPEN:     ("#c8e6c9","#43a047","#1b5e20","🟢","Åben"),
     CLOSED:   ("#ffcdd2","#e53935","#b71c1c","🔴","Lukket"),
-    ACTIVITY: ("#bbdefb","#1e88e5","#0d47a1","🔵","Aktivitet"),
+    ACTIVITY: ("#c8e6c9","#43a047","#1b5e20","🟢","Åben"),  # bagudkompatibel — behandles som OPEN
 }
 PREF_CYCLE  = {"":"sikker","sikker":"måske","måske":""}
 PREF_STYLE  = {
@@ -381,32 +381,31 @@ def _empty_cell():
 
 
 # ── Fordelingsalgoritme ───────────────────────────────────────────────────────
-def auto_assign(data: dict, mkey: str) -> dict:
+def auto_assign(data: dict, mkey: str, locked_shifts: dict | None = None) -> dict:
     """
     TRE-FASE VAGTTILDELING
     ══════════════════════
 
     Prioriteter (højest → lavest):
       1. Flest mulige åbne dage  (≥ min_per frivillige tildelt)
-      2. Aktivitetsdage: aktivitetsudvalg-frivillige tildeles FØR andre
-      3. Ja-præferencer (sikker) > Måske-præferencer > Ingen præference
-      4. Ligelig fordeling af vagter (ingen bør have 0 mens andre har mange)
-      5. Respektér min_per og max_per per vagt
+      2. Ja-præferencer (sikker) > Måske-præferencer > Ingen præference
+      3. Ligelig fordeling af vagter (ingen bør have 0 mens andre har mange)
+      4. Respektér min_per og max_per per vagt
+
+    locked_shifts: {d_str: [vid, ...]} — admin-forhåndsvalgte vagter der
+      pre-populeres og tæller med i kvoterne inden automatisk fordeling.
 
     Fase 1 – Åbningsoptimering (kun præference-frivillige):
       Behandl dage iterativt, hårdest først (færrest villige = hårdest).
-      Gentag gennemgang indtil ingen fremskridt — sikrer at ændringer i
-      kvoter fra én dag kan "låse op" for andre dage i næste iteration.
+      Gentag gennemgang indtil ingen fremskridt.
 
     Fase 2 – Kvotefordeling + hjælp til åbning:
       Frivillige med resterende kvote tildeles dag-for-dag.
       En frivillig der KAN åbne en dag (mangler præcis den ene) prioriteres.
-      Vagter på dage der ender som lukkede tæller IKKE mod kvoten
-      (unmet_quota beregnes kun ud fra åbne dage).
+      Vagter på dage der ender som lukkede tæller IKKE mod kvoten.
 
     Fase 3 – Nødpass uden præferencekrav:
-      Resterende lukkede dage forsøges åbnet med frivillige uden præference,
-      prioriteret fra tættest-på-åbning og ned.
+      Resterende lukkede dage forsøges åbnet med frivillige uden præference.
     """
     cfg      = data["monthly_config"].get(mkey, {})
     y, m     = int(mkey[:4]), int(mkey[5:7])
@@ -417,7 +416,6 @@ def auto_assign(data: dict, mkey: str) -> dict:
     prefs_m  = data["preferences"].get(mkey, {})
     vols     = data["volunteers"]
     active   = [vid for vid, v in vols.items() if v.get("active", True)]
-    is_akt   = {vid: bool(vols[vid].get("aktivitetsudvalg", False)) for vid in active}
 
     # Edge-case: ingen aktive dage eller frivillige
     if not active_d or not active:
@@ -444,10 +442,16 @@ def auto_assign(data: dict, mkey: str) -> dict:
     remaining = dict(quota)
     shifts: dict[str, list[str]] = {d: [] for d in active_d}
 
-    # ── Hjælpefunktioner ────────────────────────────────────────────────────
+    # Pre-populer med admin-låste vagter og reducér kvoter tilsvarende
+    if locked_shifts:
+        for d, vids in locked_shifts.items():
+            if d in shifts:
+                for vid in vids:
+                    if vid in active and vid not in shifts[d]:
+                        shifts[d].append(vid)
+                        remaining[vid] = max(0, remaining[vid] - 1)
 
-    def is_act_day(d: str) -> bool:
-        return dt.get(d) == ACTIVITY
+    # ── Hjælpefunktioner ────────────────────────────────────────────────────
 
     def eligible(vid: str, d: str, allow_no_pref: bool = False) -> bool:
         """Kan vid tildeles dag d?"""
@@ -462,14 +466,12 @@ def auto_assign(data: dict, mkey: str) -> dict:
         """
         Prioritetsnøgle — lav værdi = høj prioritet.
 
-        Niveau 1 — Aktivitetsdag + aktivitetsudvalg  (0 = ja, 1 = nej)
-        Niveau 2 — Præference  (0 = ja, 1 = måske, 2 = ingen)
-        Niveau 3 — Flest resterende vagter foretrækkes (lighed)
+        Niveau 1 — Præference  (0 = ja, 1 = måske, 2 = ingen)
+        Niveau 2 — Flest resterende vagter foretrækkes (lighed)
         """
-        akt  = 0 if (is_act_day(d) and is_akt[vid]) else 1
         pref = 2 - prio[vid][d]          # 0=ja, 1=måske, 2=ingen
         rem  = -remaining[vid]            # negativ → størst remaining = bedst
-        return (akt, pref, rem)
+        return (pref, rem)
 
     def fill_day(d: str, allow_no_pref: bool = False) -> bool:
         """
@@ -499,16 +501,9 @@ def auto_assign(data: dict, mkey: str) -> dict:
     # FASE 1 — Åbningsoptimering med præferencer
     # ════════════════════════════════════════════════════════════════════════
     #
-    # Aktivitetsdage behandles ALTID FØR normale åbningsdage — det er den
-    # højeste prioritet i hele algoritmen.
-    #
-    # Inden for hver dagtype (aktivitet / normal) sorteres dage efter
-    # sværhedsgrad: færrest tilgængelige præference-kandidater = hårdest = FØRST.
-    # Kun dage der faktisk KAN åbnes (nok kandidater) medtages.
-    #
-    # Iteration gentages så længe mindst én ny dag åbner pr. gennemgang:
-    # åbning af dag A bruger kvoter og kan umuliggøre åbning af dag B,
-    # så vi genberegner prioritet efter hver runde.
+    # Dage sorteres efter sværhedsgrad: færrest tilgængelige præference-
+    # kandidater = hårdest = FØRST. Iteration gentages så længe mindst én
+    # ny dag åbner pr. gennemgang.
 
     prev_open = -1
     while True:
@@ -524,10 +519,7 @@ def auto_assign(data: dict, mkey: str) -> dict:
             [d for d in active_d
              if len(shifts[d]) < min_per
              and _n_eligible(d) >= (min_per - len(shifts[d]))],
-            key=lambda d: (
-                0 if is_act_day(d) else 1,  # aktivitetsdage FØRST
-                _n_eligible(d),             # dernæst: hårdest (færrest kandidater)
-            ),
+            key=lambda d: _n_eligible(d),   # hårdest (færrest kandidater) FØRST
         )
         for d in can_open:
             fill_day(d, allow_no_pref=False)
@@ -543,17 +535,14 @@ def auto_assign(data: dict, mkey: str) -> dict:
     #
     #   Niveau A — dagtype × akt.udvalg-match:
     #     0 = aktivitetsdag OG frivillig er aktivitetsudvalg
-    #     1 = aktivitetsdag (frivillig er ikke aktivitetsudvalg)
-    #     2 = normal åbningsdag
-    #
-    #   Niveau B — åbningsstatus (opn):
+    #   Niveau A — åbningsstatus (opn):
     #     0 = dag åbner med præcis denne frivillig (gap == 1)
     #     1 = dag er allerede åben
     #     2 = dag mangler 2 (hjælp stadig nyttig)
     #     3 = dag mangler 3+ (langt fra åbning)
     #
-    #   Niveau C — præference: 0=ja, 1=måske, 2=ingen
-    #   Niveau D — færreste allerede tildelt (fordel lighedsprincippet)
+    #   Niveau B — præference: 0=ja, 1=måske, 2=ingen
+    #   Niveau C — færreste allerede tildelt (fordel lighedsprincippet)
     #
     # Dage der aldrig kan åbnes springes over (ingen tilgængelige kandidater).
 
@@ -582,13 +571,7 @@ def auto_assign(data: dict, mkey: str) -> dict:
                     if avail < gap:
                         continue
 
-                # Niveau A: dagtype × akt.udvalg
-                if is_act_day(d):
-                    dtype = 0 if is_akt[vid] else 1
-                else:
-                    dtype = 2
-
-                # Niveau B: åbningsstatus
+                # Niveau A: åbningsstatus
                 opn = (0 if gap == 1
                        else 1 if is_open
                        else 2 if gap == 2
@@ -597,7 +580,7 @@ def auto_assign(data: dict, mkey: str) -> dict:
                 pref  = 2 - prio[vid][d]    # 0=ja, 1=måske, 2=ingen
                 fill  = len(shifts[d])
 
-                score = (dtype, opn, pref, fill)
+                score = (opn, pref, fill)
                 if best_score is None or score < best_score:
                     best_score = score
                     best_d = d
@@ -615,16 +598,12 @@ def auto_assign(data: dict, mkey: str) -> dict:
     # FASE 3 — Nødpass: åbn resterende dage uden præferencekrav
     # ════════════════════════════════════════════════════════════════════════
     #
-    # Aktivitetsdage behandles stadig FØRST, dernæst normale dage.
-    # Inden for hver type: tættest-på-åbning (flest allerede tildelt) FØRST.
+    # Tættest-på-åbning (flest allerede tildelt) FØRST.
     # fill_day afviser dage der ikke kan nå min_per — ingen spild.
 
     still_closed = sorted(
         [d for d in active_d if len(shifts[d]) < min_per],
-        key=lambda d: (
-            0 if is_act_day(d) else 1,  # aktivitetsdage FØRST
-            -len(shifts[d]),            # tættest på åbning
-        ),
+        key=lambda d: -len(shifts[d]),   # tættest på åbning FØRST
     )
     for d in still_closed:
         fill_day(d, allow_no_pref=True)
@@ -826,7 +805,11 @@ def render_setup_kalender(mkey: str) -> dict:
                     continue
                 d_str = date(y, m, day).isoformat()
                 state = st.session_state[sk].get(d_str, CLOSED)
-                if state not in SETUP_STYLE:
+                # Bagudkompatibel: gamle ACTIVITY-dage vises som OPEN
+                if state == ACTIVITY:
+                    state = OPEN
+                    st.session_state[sk][d_str] = OPEN
+                if state not in SETUP_CYCLE:
                     state = CLOSED
                 bg, border, text, icon, label = SETUP_STYLE[state]
                 next_s = SETUP_CYCLE[state]
@@ -1034,8 +1017,7 @@ def _vis_vagtplan(data: dict, vid: str, vol: dict, mkey: str):
 
     c1, c2, c3 = st.columns(3)
     c1.metric("✅ Dine vagter",  f"{len(my_open_shifts)}/{kraevet}")
-    c2.metric("🟢 Åbningsdage",  åbne,
-              delta=f"heraf {aktivit} aktivitet" if aktivit else None, delta_color="off")
+    c2.metric("🟢 Åbningsdage",  åbne)
     c3.metric("📈 Åbningspct.",  f"{pct}%",
               delta=f"{lukkede} lukket" if lukkede else None, delta_color="inverse")
 
@@ -1418,20 +1400,19 @@ def _tab_opstaetning(data: dict):
 
 # ── Tab: Vagttildeling ─────────────────────────────────────────────────────────
 def _tab_tildeling(data: dict):
-    st.markdown("### ⚡ Automatisk vagttildeling")
+    st.markdown("### ⚡ Vagttildeling")
     frigivne = sorted(k for k, c in data["monthly_config"].items()
                       if c.get("released", False))
     if not frigivne:
         st.warning("📭 Ingen måneder er frigivet endnu.")
         return
 
-    # Standard: den NYESTE frigivne måned
     default_idx = len(frigivne) - 1
-
     mkey    = st.selectbox("Vælg måned", frigivne, index=default_idx,
                            format_func=mk_label, key="tildeling_month_select")
     prefs_m = data["preferences"].get(mkey, {})
     aktive  = {vid: v for vid, v in data["volunteers"].items() if v.get("active", True)}
+    akt_vols = {vid: v for vid, v in aktive.items() if v.get("aktivitetsudvalg")}
 
     c1, c2 = st.columns(2)
     c1.metric("📋 Indsendte ønsker", f"{len(prefs_m)}/{len(aktive)}")
@@ -1451,8 +1432,124 @@ def _tab_tildeling(data: dict):
             if vid not in prefs_m:
                 st.write(f"• {v['name']}")
 
+    # ── Manuel forhåndstildeling af aktivitetsfrivillige ─────────────────────
+    if akt_vols:
+        st.markdown("---")
+        st.markdown("### 🔵 Manuel tildeling af aktivitetsfrivillige")
+        st.caption(
+            "Klik på en frivillig under en dato for at låse dem til den vagt. "
+            "Låste tildelinger tæller med i kvoten og respekteres af den automatiske fordeling."
+        )
+
+        # Session state nøgle for låste vagter for denne måned
+        lock_key = f"locked_{mkey}"
+        if lock_key not in st.session_state:
+            st.session_state[lock_key] = {}   # {d_str: [vid, ...]}
+
+        locked: dict = st.session_state[lock_key]
+
+        # Hent aktive dage fra config
+        cfg_m    = data["monthly_config"].get(mkey, {})
+        y_m, m_m = int(mkey[:4]), int(mkey[5:7])
+        dt_m     = get_date_types(cfg_m, y_m, m_m)
+        open_days_m = sorted(d for d, t in dt_m.items() if t in (OPEN, ACTIVITY))
+
+        if not open_days_m:
+            st.info("Ingen åbningsdage konfigureret for denne måned.")
+        else:
+            # Kalender-header
+            st.markdown(OVERLAY_CAL_CSS, unsafe_allow_html=True)
+            cols_h = st.columns(7)
+            for i in range(7):
+                cols_h[i].markdown(
+                    f'<div style="text-align:center;font-size:11px;font-weight:700;'
+                    f'padding:5px 0;letter-spacing:0.5px;text-transform:uppercase;'
+                    f'border-bottom:3px solid #1565c0;color:#1565c0">'
+                    f'{DAG_LANG[i][:3]}</div>', unsafe_allow_html=True)
+
+            for week in calendar.monthcalendar(y_m, m_m):
+                cols = st.columns(7)
+                for i, day in enumerate(week):
+                    with cols[i]:
+                        if day == 0:
+                            _empty_cell()
+                            continue
+                        d_str = date(y_m, m_m, day).isoformat()
+                        if d_str not in open_days_m:
+                            # Lukket dag — vis grå
+                            _grey_cell_nobutton(DAG_LANG[i][:3], day, MÅN_GEN[m_m][:3], "📅 Lukket")
+                            continue
+
+                        dag_locked = locked.get(d_str, [])
+
+                        # Byg celle-indhold: låste navne
+                        navne_html = "".join(
+                            f'<div style="font-size:10px;margin-top:2px;padding:1px 5px;'
+                            f'border-radius:4px;background:#bbdefb;color:#0d47a1;font-weight:600">'
+                            f'🔒 {aktive[vid]["name"]}</div>'
+                            for vid in dag_locked if vid in aktive
+                        )
+                        # Vis også aktivitetsfrivilliges ønsker (ja/måske)
+                        oensker_html = ""
+                        for vid, v in akt_vols.items():
+                            if vid in dag_locked:
+                                continue
+                            pref = prefs_m.get(vid, {}).get(d_str, "")
+                            if pref == "sikker":
+                                oensker_html += (
+                                    f'<div style="font-size:10px;margin-top:2px;padding:1px 5px;'
+                                    f'border-radius:4px;background:#c8e6c9;color:#1b5e20">'
+                                    f'✅ {v["name"]}</div>')
+                            elif pref == "måske":
+                                oensker_html += (
+                                    f'<div style="font-size:10px;margin-top:2px;padding:1px 5px;'
+                                    f'border-radius:4px;background:#fff9c4;color:#6d4c00">'
+                                    f'🟡 {v["name"]}</div>')
+
+                        bg = "#e3f2fd" if dag_locked else "#f8f9fa"
+                        border = "#1e88e5" if dag_locked else "#dee2e6"
+                        text_c = "#0d47a1" if dag_locked else "#555"
+                        st.markdown(
+                            f'<div class="cal-overlay-cell" style="border:2px solid {border};'
+                            f'border-radius:8px;padding:6px 5px;background:{bg};'
+                            f'min-height:90px;margin-bottom:2px">'
+                            f'<div style="font-size:10px;font-weight:700;color:{text_c}">{DAG_LANG[i][:3]}</div>'
+                            f'<div style="font-size:20px;font-weight:900;color:{text_c};line-height:1">{day}</div>'
+                            f'<div style="font-size:9px;color:{text_c};margin-bottom:3px">{MÅN_GEN[m_m][:3]}</div>'
+                            f'{navne_html}{oensker_html}</div>',
+                            unsafe_allow_html=True)
+
+                        # Knapper under cellen — vælg hvilken frivillig der låses
+                        avail_for_lock = [
+                            vid for vid in akt_vols
+                            if vid not in dag_locked
+                        ]
+                        if avail_for_lock:
+                            valgt = st.selectbox(
+                                "Tilføj",
+                                ["—"] + [aktive[v]["name"] for v in avail_for_lock],
+                                key=f"lock_sel_{mkey}_{d_str}",
+                                label_visibility="collapsed")
+                            if valgt != "—":
+                                vid_valgt = next(v for v in avail_for_lock
+                                                 if aktive[v]["name"] == valgt)
+                                locked.setdefault(d_str, [])
+                                if vid_valgt not in locked[d_str]:
+                                    locked[d_str].append(vid_valgt)
+                                    st.rerun()
+                        if dag_locked:
+                            if st.button("🗑 Ryd", key=f"lock_clear_{mkey}_{d_str}",
+                                         use_container_width=True):
+                                locked.pop(d_str, None)
+                                st.rerun()
+
+    # ── Automatisk tildeling ──────────────────────────────────────────────────
     st.markdown("---")
     allerede = mkey in data.get("assignments", {})
+
+    def _do_assign():
+        locked_shifts = st.session_state.get(f"locked_{mkey}", {})
+        return auto_assign(data, mkey, locked_shifts=locked_shifts)
 
     if allerede:
         st.info("ℹ️ Vagter er allerede tildelt for denne måned.")
@@ -1468,7 +1565,7 @@ def _tab_tildeling(data: dict):
                 if not prefs_m:
                     st.error("Ingen ønsker indsendt.")
                 else:
-                    data = auto_assign(data, mkey)
+                    data = _do_assign()
                     save(data)
                     st.session_state.confirm_reassign = None
                     st.success("🎉 Vagter omfordelt!")
@@ -1478,12 +1575,12 @@ def _tab_tildeling(data: dict):
                 st.session_state.confirm_reassign = None
                 st.rerun()
     else:
-        if st.button("🚀 Tildel vagter automatisk", type="primary",
+        if st.button("🚀 Generer vagtplan", type="primary",
                      use_container_width=True, key="tildel_btn"):
             if not prefs_m:
                 st.error("Ingen frivillige har indsendt ønsker endnu.")
             else:
-                data = auto_assign(data, mkey)
+                data = _do_assign()
                 save(data)
                 st.success("🎉 Vagter er tildelt!")
                 st.balloons()
@@ -1549,10 +1646,8 @@ def _tab_resultater(data: dict):
     pct       = round(100 * åbne / total_cfg) if total_cfg > 0 else 0
 
     c1, c2, c3 = st.columns(3)
-    c1.metric("🟢 Åbningsdage",   åbne,
-              delta=f"heraf {aktivit} aktivitet" if aktivit else None, delta_color="off")
-    c2.metric("🔴 Lukkedage",     lukkede,
-              delta="af planlagte dage", delta_color="off")
+    c1.metric("🟢 Åbningsdage",   åbne)
+    c2.metric("🔴 Lukkedage",     lukkede)
     c3.metric("📈 Åbningspct.",   f"{pct}%")
 
     # Til kalenderen: brug den fulde closed-liste (inkl. setup-lukkede) for farvelægning
