@@ -69,29 +69,51 @@ html[data-theme="dark"] div[data-testid="stMetric"] [data-testid="stMetricDelta"
     div[data-testid="stMetric"] [data-testid="stMetricDelta"]{color:#90caf9 !important}
 }
 
-/* ── Kalender: fjern Streamlit-kolonne-gaps ───────────────────────────────── */
-div[data-testid="stHorizontalBlock"]:has(.cal-overlay-cell) > div[data-testid="column"],
-div[data-testid="stHorizontalBlock"]:has(.plexus-grey-cell) > div[data-testid="column"],
-div[data-testid="stHorizontalBlock"]:has(.plexus-dim-cell) > div[data-testid="column"],
-div[data-testid="stHorizontalBlock"]:has(.plexus-cal-header) > div[data-testid="column"] {
-    padding-left:0 !important; padding-right:0 !important}
+/* ── Kalender-grid: fjern alle gaps/padding i hele kolonne-hierarkiet ──────── */
 div[data-testid="stHorizontalBlock"]:has(.cal-overlay-cell),
 div[data-testid="stHorizontalBlock"]:has(.plexus-grey-cell),
 div[data-testid="stHorizontalBlock"]:has(.plexus-dim-cell),
-div[data-testid="stHorizontalBlock"]:has(.plexus-cal-header) {gap:0 !important}
-/* Fjern også top-margin på rækker under header */
-div[data-testid="stHorizontalBlock"]:has(.cal-overlay-cell),
-div[data-testid="stHorizontalBlock"]:has(.plexus-grey-cell),
-div[data-testid="stHorizontalBlock"]:has(.plexus-dim-cell) {margin-top:-1px !important}
+div[data-testid="stHorizontalBlock"]:has(.plexus-cal-header) {
+    gap:0 !important; margin:0 !important; padding:0 !important}
+div[data-testid="stHorizontalBlock"]:has(.cal-overlay-cell) > div[data-testid="column"],
+div[data-testid="stHorizontalBlock"]:has(.plexus-grey-cell) > div[data-testid="column"],
+div[data-testid="stHorizontalBlock"]:has(.plexus-dim-cell)  > div[data-testid="column"],
+div[data-testid="stHorizontalBlock"]:has(.plexus-cal-header)> div[data-testid="column"] {
+    padding:0 !important; margin:0 !important; min-width:0 !important}
+div[data-testid="stHorizontalBlock"]:has(.cal-overlay-cell) > div[data-testid="column"] > div[data-testid="stVerticalBlock"],
+div[data-testid="stHorizontalBlock"]:has(.plexus-grey-cell) > div[data-testid="column"] > div[data-testid="stVerticalBlock"],
+div[data-testid="stHorizontalBlock"]:has(.plexus-dim-cell)  > div[data-testid="column"] > div[data-testid="stVerticalBlock"],
+div[data-testid="stHorizontalBlock"]:has(.plexus-cal-header)> div[data-testid="column"] > div[data-testid="stVerticalBlock"] {
+    gap:0 !important; padding:0 !important}
+div[data-testid="stHorizontalBlock"]:has(.cal-overlay-cell) div[data-testid="element-container"],
+div[data-testid="stHorizontalBlock"]:has(.plexus-grey-cell) div[data-testid="element-container"],
+div[data-testid="stHorizontalBlock"]:has(.plexus-dim-cell)  div[data-testid="element-container"],
+div[data-testid="stHorizontalBlock"]:has(.plexus-cal-header)div[data-testid="element-container"] {
+    margin:0 !important; padding:0 !important}
+div[data-testid="stHorizontalBlock"]:has(.cal-overlay-cell) div[data-testid="stMarkdownContainer"],
+div[data-testid="stHorizontalBlock"]:has(.plexus-grey-cell) div[data-testid="stMarkdownContainer"],
+div[data-testid="stHorizontalBlock"]:has(.plexus-dim-cell)  div[data-testid="stMarkdownContainer"],
+div[data-testid="stHorizontalBlock"]:has(.plexus-cal-header)div[data-testid="stMarkdownContainer"] {
+    margin:0 !important; padding:0 !important}
+
+/* ── Kalender-wrapper: ydre ramme & afrunding via st.container() ────────── */
+.plexus-cal-boundary {display:none}
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] > div[data-testid="stMarkdownContainer"] > .plexus-cal-boundary) {
+    border:1px solid #e0e0e0 !important;
+    border-radius:12px !important;
+    overflow:hidden !important;
+    gap:0 !important;
+    padding:0 !important;
+    margin-bottom:16px !important}
 
 /* ── Svag-rød (danger/warn) knapper ──────────────────────────────────────── */
-.plexus-danger-btn + div[data-testid="stButton"] > button,
-.plexus-warn-btn   + div[data-testid="stButton"] > button {
+div[data-testid="element-container"]:has(.plexus-warn-btn)   + div[data-testid="element-container"] > div[data-testid="stButton"] > button,
+div[data-testid="element-container"]:has(.plexus-danger-btn) + div[data-testid="element-container"] > div[data-testid="stButton"] > button {
     background:#fff0f0 !important;
     color:#c62828 !important;
     border:1px solid #ef9a9a !important}
-.plexus-danger-btn + div[data-testid="stButton"] > button:hover,
-.plexus-warn-btn   + div[data-testid="stButton"] > button:hover {
+div[data-testid="element-container"]:has(.plexus-warn-btn)   + div[data-testid="element-container"] > div[data-testid="stButton"] > button:hover,
+div[data-testid="element-container"]:has(.plexus-danger-btn) + div[data-testid="element-container"] > div[data-testid="stButton"] > button:hover {
     background:#ffcdd2 !important;
     border-color:#e53935 !important}
 
@@ -820,8 +842,10 @@ def render_setup_kalender(mkey: str) -> dict:
                                  else default_date_types(y, m))
 
     st.markdown(OVERLAY_CAL_CSS, unsafe_allow_html=True)
-    _dag_header()
-    for week in calendar.monthcalendar(y, m):
+    with st.container():
+      st.markdown('<div class="plexus-cal-boundary"></div>', unsafe_allow_html=True)
+      _dag_header()
+      for week in calendar.monthcalendar(y, m):
         cols = st.columns(7)
         for i, day in enumerate(week):
             with cols[i]:
@@ -863,9 +887,11 @@ def render_pref_kalender(mkey: str, vid: str, date_types: dict, existing: dict) 
     rel_set = {d for d, t in date_types.items() if t in (OPEN, ACTIVITY)}
 
     st.markdown(OVERLAY_CAL_CSS, unsafe_allow_html=True)
-    _dag_header()
+    with st.container():
+      st.markdown('<div class="plexus-cal-boundary"></div>', unsafe_allow_html=True)
+      _dag_header()
 
-    for week in calendar.monthcalendar(y, m):
+      for week in calendar.monthcalendar(y, m):
         cols = st.columns(7)
         for i, day in enumerate(week):
             with cols[i]:
@@ -876,7 +902,6 @@ def render_pref_kalender(mkey: str, vid: str, date_types: dict, existing: dict) 
                 cfg_typ = date_types.get(d_str)
 
                 if cfg_typ in (OPEN, ACTIVITY):
-                    # Valgbar dag — klik overalt på cellen
                     state = st.session_state[sk].get(d_str, "")
                     if state not in PREF_STYLE:
                         state = ""
@@ -890,7 +915,6 @@ def render_pref_kalender(mkey: str, vid: str, date_types: dict, existing: dict) 
                         st.session_state[sk][d_str] = next_s
                         st.rerun()
                 elif cfg_typ == CLOSED:
-                    # Planlagt lukket dag — grå, ingen knap
                     _grey_cell_nobutton(DAG_LANG[i][:3], day, MÅN_GEN[m][:3], "📅 Planlagt lukket")
                 else:
                     # Dag uden konfiguration (burde ikke ske) — neutral tom celle
@@ -1433,29 +1457,25 @@ def _tab_tildeling(data: dict):
 
     allerede = mkey in data.get("assignments", {})
 
-    # ── Præference-oversigt (vises altid) ─────────────────────────────────────
-    c1, c2 = st.columns(2)
-    c1.metric("📋 Indsendte ønsker", f"{len(prefs_m)}/{len(aktive)}")
-
-    col_ja, col_nej = st.columns(2)
-    with col_ja:
-        st.markdown("**✅ Klar:**")
-        for vid, v in aktive.items():
-            if vid in prefs_m:
-                s  = sum(1 for p in prefs_m[vid].values() if p == "sikker")
-                ms = sum(1 for p in prefs_m[vid].values() if p == "måske")
-                akt = " 🔵" if v.get("aktivitetsudvalg") else ""
-                st.write(f"• {v['name']}{akt}  *(Ja: {s} / Måske: {ms})*")
-    with col_nej:
-        st.markdown("**❌ Mangler:**")
-        for vid, v in aktive.items():
-            if vid not in prefs_m:
-                st.write(f"• {v['name']}")
-
-    st.markdown("---")
-
     # ── Allerede tildelt: vis kun "Omfordel vagter" ────────────────────────────
     if allerede:
+        c1, _ = st.columns(2)
+        c1.metric("📋 Indsendte ønsker", f"{len(prefs_m)}/{len(aktive)}")
+        col_ja, col_nej = st.columns(2)
+        with col_ja:
+            st.markdown("**✅ Klar:**")
+            for vid, v in aktive.items():
+                if vid in prefs_m:
+                    s  = sum(1 for p in prefs_m[vid].values() if p == "sikker")
+                    ms = sum(1 for p in prefs_m[vid].values() if p == "måske")
+                    akt_lbl = " 🔵" if v.get("aktivitetsudvalg") else ""
+                    st.write(f"• {v['name']}{akt_lbl}  *(Ja: {s} / Måske: {ms})*")
+        with col_nej:
+            st.markdown("**❌ Mangler:**")
+            for vid, v in aktive.items():
+                if vid not in prefs_m:
+                    st.write(f"• {v['name']}")
+        st.markdown("---")
         st.info("ℹ️ Vagter er allerede tildelt for denne måned.")
         if "confirm_reassign" not in st.session_state:
             st.session_state.confirm_reassign = None
@@ -1511,9 +1531,23 @@ def _tab_tildeling(data: dict):
 
     # ─── TRIN 1: Oversigt ────────────────────────────────────────────────────
     if view == "oversigt":
-        st.info(
-            "Gennemgå de indsendte ønsker ovenfor, og gå videre når du er klar "
-            "til at låse og tildele vagter.")
+        c1, _ = st.columns(2)
+        c1.metric("📋 Indsendte ønsker", f"{len(prefs_m)}/{len(aktive)}")
+        col_ja, col_nej = st.columns(2)
+        with col_ja:
+            st.markdown("**✅ Klar:**")
+            for vid, v in aktive.items():
+                if vid in prefs_m:
+                    s  = sum(1 for p in prefs_m[vid].values() if p == "sikker")
+                    ms = sum(1 for p in prefs_m[vid].values() if p == "måske")
+                    akt_lbl = " 🔵" if v.get("aktivitetsudvalg") else ""
+                    st.write(f"• {v['name']}{akt_lbl}  *(Ja: {s} / Måske: {ms})*")
+        with col_nej:
+            st.markdown("**❌ Mangler:**")
+            for vid, v in aktive.items():
+                if vid not in prefs_m:
+                    st.write(f"• {v['name']}")
+        st.markdown("---")
         if st.button("➡️ Gå videre til vagttildeling", type="primary",
                      use_container_width=True, key="goto_tildeling_btn"):
             st.session_state[view_key] = "tildeling"
@@ -1571,80 +1605,78 @@ def _tab_tildeling(data: dict):
                 st.info("Ingen åbningsdage konfigureret for denne måned.")
             else:
                 st.markdown(OVERLAY_CAL_CSS, unsafe_allow_html=True)
-                _dag_header()
-
-                for week in calendar.monthcalendar(y_m, m_m):
-                    cols = st.columns(7)
-                    for i, day in enumerate(week):
-                        with cols[i]:
-                            if day == 0:
-                                _empty_cell()
-                                continue
-                            d_str = date(y_m, m_m, day).isoformat()
-                            if d_str not in open_days_m:
-                                _grey_cell_nobutton(DAG_LANG[i], day, MÅN_GEN[m_m][:3], "📅 Lukket")
-                                continue
-
-                            dag_locked = locked.get(d_str, [])
-
-                            navne_html = "".join(
-                                f'<div style="font-size:10px;margin-top:2px;padding:1px 5px;'
-                                f'border-radius:4px;background:#bbdefb;color:#0d47a1;font-weight:600">'
-                                f'🔒 {aktive[vid]["name"]}</div>'
-                                for vid in dag_locked if vid in aktive
-                            )
-                            oensker_html = ""
-                            for vid, v in akt_vols.items():
-                                if vid in dag_locked:
+                with st.container():
+                    st.markdown('<div class="plexus-cal-boundary"></div>', unsafe_allow_html=True)
+                    _dag_header()
+                    for week in calendar.monthcalendar(y_m, m_m):
+                        cols = st.columns(7)
+                        for i, day in enumerate(week):
+                            with cols[i]:
+                                if day == 0:
+                                    _empty_cell()
                                     continue
-                                pref = prefs_m.get(vid, {}).get(d_str, "")
-                                if pref == "sikker":
-                                    oensker_html += (
-                                        f'<div style="font-size:10px;margin-top:2px;padding:1px 5px;'
-                                        f'border-radius:4px;background:#c8e6c9;color:#1b5e20">'
-                                        f'✅ {v["name"]}</div>')
-                                elif pref == "måske":
-                                    oensker_html += (
-                                        f'<div style="font-size:10px;margin-top:2px;padding:1px 5px;'
-                                        f'border-radius:4px;background:#fff9c4;color:#6d4c00">'
-                                        f'🟡 {v["name"]}</div>')
+                                d_str = date(y_m, m_m, day).isoformat()
+                                if d_str not in open_days_m:
+                                    _grey_cell_nobutton(DAG_LANG[i], day, MÅN_GEN[m_m][:3], "📅 Lukket")
+                                    continue
 
-                            bg = "#e3f2fd" if dag_locked else "#fafafa"
-                            border = "#1e88e5" if dag_locked else "#e0e0e0"
-                            text_c = "#0d47a1" if dag_locked else "#555"
-                            st.markdown(
-                                f'<div class="cal-overlay-cell" style="border:1px solid {border};'
-                                f'border-top:3px solid {border};'
-                                f'padding:8px 5px;background:{bg};'
-                                f'min-height:90px;margin-bottom:2px">'
-                                f'<div style="font-size:10px;font-weight:700;color:{text_c}">{DAG_LANG[i]}</div>'
-                                f'<div style="font-size:22px;font-weight:900;color:{text_c};line-height:1">{day}</div>'
-                                f'<div style="font-size:9px;color:{text_c};margin-bottom:3px">{MÅN_GEN[m_m][:3]}</div>'
-                                f'{navne_html}{oensker_html}</div>',
-                                unsafe_allow_html=True)
-
-                            avail_for_lock = sorted(
-                                [vid for vid in akt_vols if vid not in dag_locked],
-                                key=lambda v: aktive[v]["name"]
-                            )
-                            if avail_for_lock:
-                                valgt = st.selectbox(
-                                    "Tilføj",
-                                    ["—"] + [aktive[v]["name"] for v in avail_for_lock],
-                                    key=f"lock_sel_{mkey}_{d_str}",
-                                    label_visibility="collapsed")
-                                if valgt != "—":
-                                    vid_valgt = next(v for v in avail_for_lock
-                                                     if aktive[v]["name"] == valgt)
-                                    locked.setdefault(d_str, [])
-                                    if vid_valgt not in locked[d_str]:
-                                        locked[d_str].append(vid_valgt)
+                                dag_locked = locked.get(d_str, [])
+                                navne_html = "".join(
+                                    f'<div style="font-size:10px;margin-top:2px;padding:1px 5px;'
+                                    f'border-radius:4px;background:#bbdefb;color:#0d47a1;font-weight:600">'
+                                    f'🔒 {aktive[vid]["name"]}</div>'
+                                    for vid in dag_locked if vid in aktive
+                                )
+                                oensker_html = ""
+                                for vid, v in akt_vols.items():
+                                    if vid in dag_locked:
+                                        continue
+                                    pref = prefs_m.get(vid, {}).get(d_str, "")
+                                    if pref == "sikker":
+                                        oensker_html += (
+                                            f'<div style="font-size:10px;margin-top:2px;padding:1px 5px;'
+                                            f'border-radius:4px;background:#c8e6c9;color:#1b5e20">'
+                                            f'✅ {v["name"]}</div>')
+                                    elif pref == "måske":
+                                        oensker_html += (
+                                            f'<div style="font-size:10px;margin-top:2px;padding:1px 5px;'
+                                            f'border-radius:4px;background:#fff9c4;color:#6d4c00">'
+                                            f'🟡 {v["name"]}</div>')
+                                bg     = "#e3f2fd" if dag_locked else "#fafafa"
+                                border = "#1e88e5" if dag_locked else "#e0e0e0"
+                                text_c = "#0d47a1" if dag_locked else "#555"
+                                st.markdown(
+                                    f'<div class="cal-overlay-cell" style="border:1px solid {border};'
+                                    f'border-top:3px solid {border};'
+                                    f'padding:8px 5px;background:{bg};'
+                                    f'min-height:90px;margin-bottom:2px">'
+                                    f'<div style="font-size:10px;font-weight:700;color:{text_c}">{DAG_LANG[i]}</div>'
+                                    f'<div style="font-size:22px;font-weight:900;color:{text_c};line-height:1">{day}</div>'
+                                    f'<div style="font-size:9px;color:{text_c};margin-bottom:3px">{MÅN_GEN[m_m][:3]}</div>'
+                                    f'{navne_html}{oensker_html}</div>',
+                                    unsafe_allow_html=True)
+                                avail_for_lock = sorted(
+                                    [vid for vid in akt_vols if vid not in dag_locked],
+                                    key=lambda v: aktive[v]["name"]
+                                )
+                                if avail_for_lock:
+                                    valgt = st.selectbox(
+                                        "Tilføj",
+                                        ["—"] + [aktive[v]["name"] for v in avail_for_lock],
+                                        key=f"lock_sel_{mkey}_{d_str}",
+                                        label_visibility="collapsed")
+                                    if valgt != "—":
+                                        vid_valgt = next(v for v in avail_for_lock
+                                                         if aktive[v]["name"] == valgt)
+                                        locked.setdefault(d_str, [])
+                                        if vid_valgt not in locked[d_str]:
+                                            locked[d_str].append(vid_valgt)
+                                            st.rerun()
+                                if dag_locked:
+                                    if st.button("🗑 Ryd", key=f"lock_clear_{mkey}_{d_str}",
+                                                 use_container_width=True):
+                                        locked.pop(d_str, None)
                                         st.rerun()
-                            if dag_locked:
-                                if st.button("🗑 Ryd", key=f"lock_clear_{mkey}_{d_str}",
-                                             use_container_width=True):
-                                    locked.pop(d_str, None)
-                                    st.rerun()
 
         st.markdown("---")
         st.markdown(
