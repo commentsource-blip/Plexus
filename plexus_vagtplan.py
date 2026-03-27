@@ -525,22 +525,31 @@ def auto_assign(data: dict, mkey: str, locked_shifts: dict | None = None) -> dic
         rem  = -remaining[vid]    # størst remaining = bedst
         return (pref, rem)
 
-    def _min_dist_to_open(d: str) -> int:
+    def _spread_score(d: str) -> int:
         """
-        Minimum antal dage til nærmeste allerede-åbne dag.
-        Bruges til at sprede åbningsdage: høj afstand = høj prioritet.
-        Hvis ingen dage er åbne endnu, returneres afstand til midten af
-        den aktive dagliste, så den første åbningsdag lander centralt.
+        Afstand til nærmeste ANDEN allerede-åbne dag (d selv er altid ekskluderet).
+        Høj afstand = dag er isoleret = høj prioritet for spredning.
+        Bruges for ALLE dage (åbne og lukkede) i scoringsberegningen.
+
+        Specielle tilfælde:
+        - Ingen andre åbne dage endnu: foretrék dage tæt på midten af måneden,
+          så første åbningsdag lander centralt og maksimerer mulighed for
+          ligelig fordeling fremadrettet.
+        - Dag er udenfor active_d: returnér 0.
         """
-        open_so_far = [d2 for d2 in active_d if len(shifts[d2]) >= min_per]
-        if not open_so_far:
-            # Ingen åbne dage endnu — foretrék dage tæt på midten af måneden
-            # (lille afstand til midten = højere prioritet, vi negerer senere)
+        open_others = [d2 for d2 in active_d
+                       if d2 != d and len(shifts[d2]) >= min_per]
+        if not open_others:
+            # Ingen andre åbne dage — favorér midten af måneden
             mid_idx = len(active_d) / 2.0
-            idx     = active_d.index(d)
-            return int(abs(idx - mid_idx) * 100)   # skaleret for stabilitet
+            try:
+                idx = active_d.index(d)
+            except ValueError:
+                return 0
+            # Inverteret afstand til midten: stor = tæt på midten = god startdag
+            return max(0, int((len(active_d) - abs(idx - mid_idx) * 2)))
         d_obj = day_obj[d]
-        return min(abs((d_obj - day_obj[d2]).days) for d2 in open_so_far)
+        return min(abs((d_obj - day_obj[d2]).days) for d2 in open_others)
 
     def fill_day(d: str, allow_no_pref: bool = False) -> bool:
         """
@@ -587,9 +596,9 @@ def auto_assign(data: dict, mkey: str, locked_shifts: dict | None = None) -> dic
             [d for d in active_d
              if len(shifts[d]) < min_per
              and _n_eligible(d) >= (min_per - len(shifts[d]))],
-            key=lambda d: (-_min_dist_to_open(d), _n_eligible(d)),
-            #              ↑ fjernest fra åbne dage FØRST (spredning)
-            #                                        ↑ sværest som tiebreaker
+            key=lambda d: (-_spread_score(d), _n_eligible(d)),
+            #              ↑ mest isoleret FØRST (spredning)
+            #                                ↑ sværest som tiebreaker
         )
         for d in can_open:
             fill_day(d, allow_no_pref=False)
@@ -608,8 +617,11 @@ def auto_assign(data: dict, mkey: str, locked_shifts: dict | None = None) -> dic
     #     2 = dag mangler 2 (hjælp stadig nyttig)
     #     3 = dag mangler 3+ (langt fra åbning)
     #
-    #   Niveau B (spread) — spredning (kun relevant for dage der åbner, opn=0):
-    #     Negeret afstand til nærmeste åbne dag — stor afstand = høj prioritet
+    #   Niveau B (spread) — spredning, gælder for ALLE dage:
+    #     -_spread_score(d): stor afstand til nærmeste ANDEN åbne dag
+    #     → isolerede dage prioriteres, uanset om de er åbne eller lukkede.
+    #     Dette sikrer at frivillige uden præferencer ikke alle
+    #     klumper på de tidligste allerede-åbne dage.
     #
     #   Niveau C (pref) — præference: 0=ja, 1=måske, 2=ingen
     #   Niveau D (fill) — færreste allerede tildelt (lighed)
@@ -643,9 +655,9 @@ def auto_assign(data: dict, mkey: str, locked_shifts: dict | None = None) -> dic
                        else 2 if gap == 2
                        else 3)
 
-                # Sprednings-bonus: kun relevant når en ny dag kan åbnes (opn=0)
-                # Stor afstand til nærmeste åbne dag → lavere (bedre) score
-                spread = -_min_dist_to_open(d) if opn == 0 else 0
+                # Spredning gælder for ALLE dage — isolerede dage foretrækkes
+                # uanset om de åbner en ny dag eller allerede er åbne.
+                spread = -_spread_score(d)
 
                 pref = 2 - prio[vid][d]
                 fill = len(shifts[d])
@@ -673,7 +685,7 @@ def auto_assign(data: dict, mkey: str, locked_shifts: dict | None = None) -> dic
 
     still_closed = sorted(
         [d for d in active_d if len(shifts[d]) < min_per],
-        key=lambda d: -_min_dist_to_open(d),   # fjernest fra åbne dage FØRST
+        key=lambda d: -_spread_score(d),   # mest isoleret FØRST
     )
     for d in still_closed:
         fill_day(d, allow_no_pref=True)
@@ -1480,24 +1492,22 @@ def _tab_tildeling(data: dict):
 
     allerede = mkey in data.get("assignments", {})
 
-    # ── Allerede tildelt: vis kun "Omfordel vagter" ────────────────────────────
+    # ── Allerede tildelt: vis vagtplan + "Omfordel vagter" ────────────────────
     if allerede:
-        c1, _ = st.columns(2)
-        c1.metric("📋 Indsendte ønsker", f"{len(prefs_m)}/{len(aktive)}")
-        col_ja, col_nej = st.columns(2)
-        with col_ja:
-            st.markdown("**✅ Klar:**")
-            for vid, v in aktive.items():
-                if vid in prefs_m:
-                    s  = sum(1 for p in prefs_m[vid].values() if p == "sikker")
-                    ms = sum(1 for p in prefs_m[vid].values() if p == "måske")
-                    akt_lbl = " 🔵" if v.get("aktivitetsudvalg") else ""
-                    st.write(f"• {v['name']}{akt_lbl}  *(Ja: {s} / Måske: {ms})*")
-        with col_nej:
-            st.markdown("**❌ Mangler:**")
-            for vid, v in aktive.items():
-                if vid not in prefs_m:
-                    st.write(f"• {v['name']}")
+        asgn       = data["assignments"][mkey]
+        shifts_a   = asgn.get("shifts", {})
+        open_days  = asgn.get("open", [])
+        closed_a   = asgn.get("closed", [])
+        activity_a = asgn.get("activity", [])
+        vols       = data["volunteers"]
+
+        st.markdown("### 📅 Udgivet vagtplan")
+        st.caption(f"⏱️ Genereret: {asgn.get('generated_at', '–')}")
+        st.markdown(
+            cal_html_resultater(mkey, shifts_a, open_days, closed_a, activity_a, vols,
+                                volunteer_view=False,
+                                configured_open=asgn.get("configured_open")),
+            unsafe_allow_html=True)
         st.markdown("---")
         st.info("ℹ️ Vagter er allerede tildelt for denne måned.")
         if "confirm_reassign" not in st.session_state:
