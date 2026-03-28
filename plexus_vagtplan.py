@@ -388,12 +388,15 @@ def _colored_cell(bg, border, text, dag, day, maan, status, overlay=False):
     st.markdown(
         f'<div{cls} style="background:{bg};border:1px solid {border};'
         f'border-top:3px solid {border};'
-        f'padding:8px 5px;vertical-align:top;min-height:90px">'
-        f'<div style="font-size:10px;font-weight:700;color:{text};'
-        f'text-transform:uppercase;letter-spacing:0.4px">{dag}</div>'
-        f'<div style="font-size:22px;font-weight:900;color:{text};line-height:1">{day}</div>'
-        f'<div style="font-size:9px;color:{text};opacity:0.8;margin-bottom:2px">{maan}</div>'
-        f'<div style="font-size:11px;font-weight:600;color:{text}">{status}</div>'
+        f'padding:8px 6px;vertical-align:top;height:120px;box-sizing:border-box;'
+        f'display:flex;flex-direction:column;">'
+        f'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:2px">'
+        f'<span style="font-size:10px;font-weight:700;color:{text};'
+        f'text-transform:uppercase;letter-spacing:0.4px">{dag}</span>'
+        f'<span style="font-size:10px;font-weight:600;color:{text};white-space:nowrap">{status}</span>'
+        f'</div>'
+        f'<div style="font-size:24px;font-weight:900;color:{text};line-height:1.1">{day}</div>'
+        f'<div style="font-size:9px;color:{text};opacity:0.75">{maan}</div>'
         f'</div>', unsafe_allow_html=True)
 
 
@@ -401,12 +404,15 @@ def _grey_cell_nobutton(dag, day, maan, label=""):
     """Grå celle UDEN knap — vises for ikke-valgbare dage."""
     st.markdown(
         f'<div class="plexus-grey-cell" style="background:#f5f5f5;border:1px solid #e0e0e0;'
-        f'padding:8px 5px;vertical-align:top;'
-        f'min-height:90px;color:#bbb;opacity:0.6">'
-        f'<div style="font-size:10px;font-weight:700;text-transform:uppercase">{dag}</div>'
-        f'<div style="font-size:22px;font-weight:900;line-height:1">{day}</div>'
-        f'<div style="font-size:9px;opacity:0.8;margin-bottom:2px">{maan}</div>'
-        f'<div style="font-size:10px;margin-top:3px">{label}</div>'
+        f'padding:8px 6px;vertical-align:top;'
+        f'height:120px;box-sizing:border-box;display:flex;flex-direction:column;'
+        f'color:#bbb;opacity:0.6">'
+        f'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:2px">'
+        f'<span style="font-size:10px;font-weight:700;text-transform:uppercase">{dag}</span>'
+        f'<span style="font-size:10px;font-weight:600;white-space:nowrap">{label}</span>'
+        f'</div>'
+        f'<div style="font-size:24px;font-weight:900;line-height:1.1">{day}</div>'
+        f'<div style="font-size:9px;opacity:0.8">{maan}</div>'
         f'</div>', unsafe_allow_html=True)
 
 
@@ -424,7 +430,7 @@ def _non_vagtdag_cell(dag, day, maan):
 
 
 def _empty_cell():
-    st.markdown('<div style="min-height:110px"></div>', unsafe_allow_html=True)
+    st.markdown('<div style="height:120px;box-sizing:border-box"></div>', unsafe_allow_html=True)
 
 
 # ── Fordelingsalgoritme ───────────────────────────────────────────────────────
@@ -758,7 +764,7 @@ def cal_html_resultater(mkey, shifts, open_days, closed_days, activity_days,
         for i, day in enumerate(week):
             if day == 0:
                 rows += ('<td class="plexus-cal-empty" style="background:#fafafa;border:1px solid #ececec;'
-                         'padding:6px;min-width:100px"></td>')
+                         'padding:6px;min-width:110px;height:130px;box-sizing:border-box"></td>')
                 continue
             d_str = date(y, m, day).isoformat()
 
@@ -792,11 +798,13 @@ def cal_html_resultater(mkey, shifts, open_days, closed_days, activity_days,
                     for vid, name in navne
                 )
                 rows += (f'<td style="background:{bg};border:1px solid #ccc;'
-                         f'padding:8px 5px;vertical-align:top;min-width:100px">'
-                         f'<div style="font-size:10px;font-weight:700;color:{hdr}">{DAG_LANG[i]}</div>'
-                         f'<div style="font-size:22px;font-weight:900;color:{hdr};line-height:1">{day}</div>'
-                         f'<div style="font-size:9px;color:{hdr};margin-bottom:2px">{MÅN_GEN[m]}</div>'
-                         f'<div style="font-size:10px;color:{hdr}">{dot} {status_txt}</div>'
+                         f'padding:8px 6px;vertical-align:top;min-width:110px;height:130px;box-sizing:border-box">'
+                         f'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:2px">'
+                         f'<span style="font-size:10px;font-weight:700;color:{hdr}">{DAG_LANG[i]}</span>'
+                         f'<span style="font-size:10px;font-weight:600;color:{hdr};white-space:nowrap">{dot} {status_txt}</span>'
+                         f'</div>'
+                         f'<div style="font-size:22px;font-weight:900;color:{hdr};line-height:1.1">{day}</div>'
+                         f'<div style="font-size:9px;color:{hdr};margin-bottom:4px">{MÅN_GEN[m]}</div>'
                          f'{names_html}</td>')
 
             elif was_planned_open:
@@ -821,21 +829,25 @@ def cal_html_resultater(mkey, shifts, open_days, closed_days, activity_days,
                         )
                     )
                 rows += (f'<td style="background:{bg};border:1px solid #ef9a9a;'
-                         f'padding:8px 5px;vertical-align:top;min-width:100px">'
-                         f'<div style="font-size:10px;font-weight:700;color:{hdr}">{DAG_LANG[i]}</div>'
-                         f'<div style="font-size:22px;font-weight:900;color:{hdr};line-height:1">{day}</div>'
-                         f'<div style="font-size:9px;color:{hdr};margin-bottom:2px">{MÅN_GEN[m]}</div>'
-                         f'<div style="font-size:10px;color:{hdr}">🔴</div>'
+                         f'padding:8px 6px;vertical-align:top;min-width:110px;height:130px;box-sizing:border-box">'
+                         f'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:2px">'
+                         f'<span style="font-size:10px;font-weight:700;color:{hdr}">{DAG_LANG[i]}</span>'
+                         f'<span style="font-size:10px;font-weight:600;color:{hdr};white-space:nowrap">🔴 Lukket</span>'
+                         f'</div>'
+                         f'<div style="font-size:22px;font-weight:900;color:{hdr};line-height:1.1">{day}</div>'
+                         f'<div style="font-size:9px;color:{hdr};margin-bottom:4px">{MÅN_GEN[m]}</div>'
                          f'{body_html}</td>')
 
             else:
                 # ── Planlagt lukket (sat til CLOSED i opsætningen) ───
                 rows += (f'<td class="plexus-cal-planned-closed" style="background:#f5f5f5;border:1px solid #e0e0e0;'
-                         f'padding:8px 5px;vertical-align:top;min-width:100px;opacity:0.6">'
-                         f'<div style="font-size:10px;font-weight:700;color:#9e9e9e">{DAG_LANG[i]}</div>'
-                         f'<div style="font-size:22px;font-weight:900;color:#bdbdbd;line-height:1">{day}</div>'
-                         f'<div style="font-size:9px;color:#bdbdbd;margin-bottom:2px">{MÅN_GEN[m]}</div>'
-                         f'<div style="font-size:10px;color:#bdbdbd">📅 Planlagt lukket</div>'
+                         f'padding:8px 6px;vertical-align:top;min-width:110px;height:130px;box-sizing:border-box;opacity:0.6">'
+                         f'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:2px">'
+                         f'<span style="font-size:10px;font-weight:700;color:#9e9e9e">{DAG_LANG[i]}</span>'
+                         f'<span style="font-size:10px;color:#bdbdbd;white-space:nowrap">📅 Lukket</span>'
+                         f'</div>'
+                         f'<div style="font-size:22px;font-weight:900;color:#bdbdbd;line-height:1.1">{day}</div>'
+                         f'<div style="font-size:9px;color:#bdbdbd">{MÅN_GEN[m]}</div>'
                          f'</td>')
 
         rows += "</tr>"
@@ -1803,10 +1815,10 @@ def _tab_resultater(data: dict):
     closed_for_cal = asgn.get("closed", [])
 
     if asgn.get("unmet_quota"):
-        st.markdown("**⚠️ Frivillige med ufyldt kvote:**")
-        for vid, mangler in asgn["unmet_quota"].items():
-            navn = vols.get(vid, {}).get("name", vid)
-            st.warning(f"• **{navn}** — fik {mangler} færre vagt(er) end aftalt")
+        with st.expander(f"⚠️ Frivillige med ufyldt kvote ({len(asgn['unmet_quota'])})"):
+            for vid, mangler in asgn["unmet_quota"].items():
+                navn = vols.get(vid, {}).get("name", vid)
+                st.write(f"• **{navn}** — fik {mangler} færre vagt(er) end aftalt")
     else:
         st.success("✅ Alle frivillige har fået deres fulde kvote tildelt")
 
