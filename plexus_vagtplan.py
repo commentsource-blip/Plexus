@@ -212,15 +212,16 @@ html[data-theme="dark"] .plexus-calendar td[style*="background:#3a1010"] div{
 # CSS til usynlig overlay-knap der dækker hele datocellen
 OVERLAY_CAL_CSS = """
 <style>
-div[data-testid="stMarkdownContainer"]:has(.cal-overlay-cell)
-  + div[data-testid="stButton"] {
+/* Overlay: element-container med cal-overlay-cell efterfulgt af stButton */
+div[data-testid="element-container"]:has(.cal-overlay-cell)
+  + div[data-testid="element-container"] {
     margin-top: -72px !important;
     height: 72px !important;
     position: relative;
     z-index: 10;
 }
-div[data-testid="stMarkdownContainer"]:has(.cal-overlay-cell)
-  + div[data-testid="stButton"] > button {
+div[data-testid="element-container"]:has(.cal-overlay-cell)
+  + div[data-testid="element-container"] > div[data-testid="stButton"] > button {
     height: 72px !important;
     width: 100% !important;
     opacity: 0 !important;
@@ -232,9 +233,9 @@ div[data-testid="stMarkdownContainer"]:has(.cal-overlay-cell)
     display: block !important;
     border-radius: 0 !important;
 }
-/* Hover-glow på cellen: viser at hele fladen er klikbar */
+/* Hover-glow: viser at cellen er klikbar */
 .cal-overlay-cell:hover {
-    filter: brightness(0.93) !important;
+    filter: brightness(0.91) !important;
     cursor: pointer !important;
 }
 </style>
@@ -896,7 +897,7 @@ def cal_html_resultater(mkey, shifts, open_days, closed_days, activity_days,
                          f'padding:8px 6px;vertical-align:top;min-width:110px;height:130px;box-sizing:border-box;opacity:0.6">'
                          f'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:2px">'
                          f'<span style="font-size:10px;font-weight:700;color:#9e9e9e">{DAG_LANG[i]}</span>'
-                         f'<span style="font-size:10px;color:#bdbdbd;white-space:nowrap">📅 Lukket</span>'
+                         f'<span style="font-size:10px;color:#bdbdbd;white-space:nowrap">📅 Planlagt lukket</span>'
                          f'</div>'
                          f'<div style="font-size:22px;font-weight:900;color:#bdbdbd;line-height:1.1">{day}</div>'
                          f'<div style="font-size:9px;color:#bdbdbd">{MÅN_GEN[m]}</div>'
@@ -925,6 +926,7 @@ def render_setup_kalender(mkey: str) -> dict:
         st.session_state[sk] = (dict(cfg["date_types"]) if "date_types" in cfg
                                  else default_date_types(y, m))
 
+    st.markdown(OVERLAY_CAL_CSS, unsafe_allow_html=True)
     with st.container():
       st.markdown('<div class="plexus-cal-boundary"></div>', unsafe_allow_html=True)
       _dag_header()
@@ -939,14 +941,11 @@ def render_setup_kalender(mkey: str) -> dict:
                 state = st.session_state[sk].get(d_str, CLOSED)
                 if state not in SETUP_CYCLE:
                     state = CLOSED
-                _, _, _, icon, lbl = SETUP_STYLE[state]
+                bg, border, text, icon, label = SETUP_STYLE[state]
                 next_s = SETUP_CYCLE[state]
-                css_cls = "plexus-cell-open" if state == OPEN else "plexus-cell-closed-s"
-                st.markdown(
-                    f'<div class="plexus-cell-marker {css_cls}"></div>',
-                    unsafe_allow_html=True)
-                btn_lbl = f"{DAG_LANG[i][:3]}  {icon} {lbl}\n{day}. {MÅN_GEN[m][:3]}"
-                if st.button(btn_lbl, key=f"sc_{mkey}_{d_str}",
+                _colored_cell(bg, border, text, DAG_LANG[i][:3], day, MÅN_GEN[m][:3],
+                               f"{icon} {label}", overlay=True)
+                if st.button(".", key=f"sc_{mkey}_{d_str}",
                              use_container_width=True):
                     st.session_state[sk][d_str] = next_s
                     st.rerun()
@@ -972,10 +971,7 @@ def render_pref_kalender(mkey: str, vid: str, date_types: dict, existing: dict) 
         st.session_state[sk] = dict(existing)
     rel_set = {d for d, t in date_types.items() if t in (OPEN, ACTIVITY)}
 
-    _PREF_CLS = {"": "plexus-cell-pref-none",
-                  "sikker": "plexus-cell-pref-ja",
-                  "måske":  "plexus-cell-pref-maybe"}
-
+    st.markdown(OVERLAY_CAL_CSS, unsafe_allow_html=True)
     with st.container():
       st.markdown('<div class="plexus-cal-boundary"></div>', unsafe_allow_html=True)
       _dag_header()
@@ -994,19 +990,16 @@ def render_pref_kalender(mkey: str, vid: str, date_types: dict, existing: dict) 
                     state = st.session_state[sk].get(d_str, "")
                     if state not in PREF_STYLE:
                         state = ""
-                    _, _, _, icon, lbl = PREF_STYLE[state]
+                    bg, border, text, icon, label = PREF_STYLE[state]
                     next_s = PREF_CYCLE[state]
-                    css_cls = _PREF_CLS.get(state, "plexus-cell-pref-none")
-                    st.markdown(
-                        f'<div class="plexus-cell-marker {css_cls}"></div>',
-                        unsafe_allow_html=True)
-                    btn_lbl = f"{DAG_LANG[i][:3]}  {icon} {lbl}\n{day}. {MÅN_GEN[m][:3]}"
-                    if st.button(btn_lbl, key=f"vp_{mkey}_{vid}_{d_str}",
+                    _colored_cell(bg, border, text, DAG_LANG[i][:3], day, MÅN_GEN[m][:3],
+                                   f"{icon} {label}", overlay=True)
+                    if st.button(".", key=f"vp_{mkey}_{vid}_{d_str}",
                                  use_container_width=True):
                         st.session_state[sk][d_str] = next_s
                         st.rerun()
                 elif cfg_typ == CLOSED:
-                    _grey_cell_nobutton(DAG_LANG[i][:3], day, MÅN_GEN[m][:3], "📅 Lukket")
+                    _grey_cell_nobutton(DAG_LANG[i][:3], day, MÅN_GEN[m][:3], "📅 Planlagt lukket")
                 else:
                     _empty_cell()
 
@@ -1189,7 +1182,7 @@ def _vis_vagtplan(data: dict, vid: str, vol: dict, mkey: str):
     c1.metric("✅ Dine vagter",  f"{len(my_open_shifts)}/{kraevet}")
     c2.metric("🟢 Åbningsdage",  åbne)
     c3.metric("📈 Åbningspct.",  f"{pct}%",
-              delta=f"{lukkede} lukket" if lukkede else None, delta_color="inverse")
+)
 
     st.markdown("### 📅 Vagtplan")
     # volunteer_view=True: dage uden nok frivillige viser ikke navne
@@ -1450,7 +1443,7 @@ def _tab_opstaetning(data: dict):
         n_closed = sum(1 for t in dt.values() if t == CLOSED)
         c1, c2, c3 = st.columns(3)
         c1.metric("🟢 Åbningsdage", n_open,
-                  delta=f"heraf {n_act} aktivitet" if n_act else None, delta_color="off")
+)
         c2.metric("🔴 Lukkede dage", n_closed)
         if cfg.get("deadline"):
             try:
