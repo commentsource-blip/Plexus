@@ -101,47 +101,6 @@ div[data-testid="stHorizontalBlock"]:has(.plexus-dim-cell)  div[data-testid="stM
 div[data-testid="stHorizontalBlock"]:has(.plexus-cal-header)div[data-testid="stMarkdownContainer"] {
     margin:0 !important; padding:0 !important}
 
-/* ── Kalender-celler som knapper ─────────────────────────────────────────── */
-/* Marker-div er usynlig; CSS bruger den til at style den efterfølgende knap */
-.plexus-cell-marker{display:none}
-div[data-testid="element-container"]:has(.plexus-cell-marker)
-  + div[data-testid="element-container"] div[data-testid="stButton"] > button {
-    height:72px !important; width:100% !important;
-    text-align:left !important; padding:5px 6px !important;
-    white-space:pre-line !important; border-radius:0 !important;
-    font-size:12px !important; line-height:1.3 !important;
-    font-weight:500 !important; margin:0 !important;
-    transition:filter .12s !important; cursor:pointer !important;
-    display:block !important}
-div[data-testid="element-container"]:has(.plexus-cell-marker)
-  + div[data-testid="element-container"] div[data-testid="stButton"] > button:hover {
-    filter:brightness(0.90) !important}
-/* Setup: OPEN */
-div[data-testid="element-container"]:has(.plexus-cell-open)
-  + div[data-testid="element-container"] div[data-testid="stButton"] > button {
-    background:#c8e6c9 !important; color:#1b5e20 !important;
-    border:1px solid #43a047 !important; border-top:3px solid #43a047 !important}
-/* Setup: CLOSED */
-div[data-testid="element-container"]:has(.plexus-cell-closed-s)
-  + div[data-testid="element-container"] div[data-testid="stButton"] > button {
-    background:#ffcdd2 !important; color:#b71c1c !important;
-    border:1px solid #e53935 !important; border-top:3px solid #e53935 !important}
-/* Pref: ikke valgt */
-div[data-testid="element-container"]:has(.plexus-cell-pref-none)
-  + div[data-testid="element-container"] div[data-testid="stButton"] > button {
-    background:#f8f9fa !important; color:#555 !important;
-    border:1px solid #dee2e6 !important; border-top:3px solid #dee2e6 !important}
-/* Pref: sikker/ja */
-div[data-testid="element-container"]:has(.plexus-cell-pref-ja)
-  + div[data-testid="element-container"] div[data-testid="stButton"] > button {
-    background:#c8e6c9 !important; color:#1b5e20 !important;
-    border:1px solid #43a047 !important; border-top:3px solid #43a047 !important}
-/* Pref: måske */
-div[data-testid="element-container"]:has(.plexus-cell-pref-maybe)
-  + div[data-testid="element-container"] div[data-testid="stButton"] > button {
-    background:#fff9c4 !important; color:#6d4c00 !important;
-    border:1px solid #fbc02d !important; border-top:3px solid #fbc02d !important}
-
 /* ── Kalender-wrapper: ydre ramme & afrunding via st.container() ────────── */
 .plexus-cal-boundary {display:none}
 div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] > div[data-testid="stMarkdownContainer"] > .plexus-cal-boundary) {
@@ -209,37 +168,8 @@ html[data-theme="dark"] .plexus-calendar td[style*="background:#3a1010"] div{
 </style>
 """
 
-# CSS til usynlig overlay-knap der dækker hele datocellen
-OVERLAY_CAL_CSS = """
-<style>
-/* Overlay: element-container med cal-overlay-cell efterfulgt af stButton */
-div[data-testid="element-container"]:has(.cal-overlay-cell)
-  + div[data-testid="element-container"] {
-    margin-top: -72px !important;
-    height: 72px !important;
-    position: relative;
-    z-index: 10;
-}
-div[data-testid="element-container"]:has(.cal-overlay-cell)
-  + div[data-testid="element-container"] > div[data-testid="stButton"] > button {
-    height: 72px !important;
-    width: 100% !important;
-    opacity: 0 !important;
-    cursor: pointer !important;
-    border: none !important;
-    background: transparent !important;
-    margin: 0 !important;
-    padding: 0 !important;
-    display: block !important;
-    border-radius: 0 !important;
-}
-/* Hover-glow: viser at cellen er klikbar */
-.cal-overlay-cell:hover {
-    filter: brightness(0.91) !important;
-    cursor: pointer !important;
-}
-</style>
-"""
+# OVERLAY_CAL_CSS: ikke i brug — knapper vises under cellerne
+OVERLAY_CAL_CSS = ""
 
 # ── Persistent storage via Supabase REST API ─────────────────────────────────
 #
@@ -926,7 +856,6 @@ def render_setup_kalender(mkey: str) -> dict:
         st.session_state[sk] = (dict(cfg["date_types"]) if "date_types" in cfg
                                  else default_date_types(y, m))
 
-    st.markdown(OVERLAY_CAL_CSS, unsafe_allow_html=True)
     with st.container():
       st.markdown('<div class="plexus-cal-boundary"></div>', unsafe_allow_html=True)
       _dag_header()
@@ -943,9 +872,10 @@ def render_setup_kalender(mkey: str) -> dict:
                     state = CLOSED
                 bg, border, text, icon, label = SETUP_STYLE[state]
                 next_s = SETUP_CYCLE[state]
+                n_icon, n_label = SETUP_STYLE[next_s][3], SETUP_STYLE[next_s][4]
                 _colored_cell(bg, border, text, DAG_LANG[i][:3], day, MÅN_GEN[m][:3],
-                               f"{icon} {label}", overlay=True)
-                if st.button(".", key=f"sc_{mkey}_{d_str}",
+                               f"{icon} {label}", overlay=False)
+                if st.button(f"{n_icon} → {n_label}", key=f"sc_{mkey}_{d_str}",
                              use_container_width=True):
                     st.session_state[sk][d_str] = next_s
                     st.rerun()
@@ -971,7 +901,6 @@ def render_pref_kalender(mkey: str, vid: str, date_types: dict, existing: dict) 
         st.session_state[sk] = dict(existing)
     rel_set = {d for d, t in date_types.items() if t in (OPEN, ACTIVITY)}
 
-    st.markdown(OVERLAY_CAL_CSS, unsafe_allow_html=True)
     with st.container():
       st.markdown('<div class="plexus-cal-boundary"></div>', unsafe_allow_html=True)
       _dag_header()
@@ -992,9 +921,10 @@ def render_pref_kalender(mkey: str, vid: str, date_types: dict, existing: dict) 
                         state = ""
                     bg, border, text, icon, label = PREF_STYLE[state]
                     next_s = PREF_CYCLE[state]
+                    _, _, _, n_icon, n_label = PREF_STYLE[next_s]
                     _colored_cell(bg, border, text, DAG_LANG[i][:3], day, MÅN_GEN[m][:3],
-                                   f"{icon} {label}", overlay=True)
-                    if st.button(".", key=f"vp_{mkey}_{vid}_{d_str}",
+                                   f"{icon} {label}", overlay=False)
+                    if st.button(f"{n_icon} {n_label}", key=f"vp_{mkey}_{vid}_{d_str}",
                                  use_container_width=True):
                         st.session_state[sk][d_str] = next_s
                         st.rerun()
@@ -1016,7 +946,6 @@ def render_pref_mobil(mkey: str, vid: str, date_types: dict, existing: dict) -> 
         st.info("Ingen datoer at vælge endnu.")
         return dict(st.session_state[sk])
 
-    st.markdown(OVERLAY_CAL_CSS, unsafe_allow_html=True)
     for i in range(0, len(rel_dates), 3):
         batch = rel_dates[i:i + 3]
         cols  = st.columns(3)
