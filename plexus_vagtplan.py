@@ -71,30 +71,76 @@ html[data-theme="dark"] div[data-testid="stMetric"] [data-testid="stMetricDelta"
 
 /* ── Kalender-grid: fjern alle gaps/padding i hele kolonne-hierarkiet ──────── */
 div[data-testid="stHorizontalBlock"]:has(.cal-overlay-cell),
+div[data-testid="stHorizontalBlock"]:has(.plexus-cell-marker),
 div[data-testid="stHorizontalBlock"]:has(.plexus-grey-cell),
 div[data-testid="stHorizontalBlock"]:has(.plexus-dim-cell),
 div[data-testid="stHorizontalBlock"]:has(.plexus-cal-header) {
     gap:0 !important; margin:0 !important; padding:0 !important}
 div[data-testid="stHorizontalBlock"]:has(.cal-overlay-cell) > div[data-testid="column"],
+div[data-testid="stHorizontalBlock"]:has(.plexus-cell-marker) > div[data-testid="column"],
 div[data-testid="stHorizontalBlock"]:has(.plexus-grey-cell) > div[data-testid="column"],
 div[data-testid="stHorizontalBlock"]:has(.plexus-dim-cell)  > div[data-testid="column"],
 div[data-testid="stHorizontalBlock"]:has(.plexus-cal-header)> div[data-testid="column"] {
     padding:0 !important; margin:0 !important; min-width:0 !important}
 div[data-testid="stHorizontalBlock"]:has(.cal-overlay-cell) > div[data-testid="column"] > div[data-testid="stVerticalBlock"],
+div[data-testid="stHorizontalBlock"]:has(.plexus-cell-marker) > div[data-testid="column"] > div[data-testid="stVerticalBlock"],
 div[data-testid="stHorizontalBlock"]:has(.plexus-grey-cell) > div[data-testid="column"] > div[data-testid="stVerticalBlock"],
 div[data-testid="stHorizontalBlock"]:has(.plexus-dim-cell)  > div[data-testid="column"] > div[data-testid="stVerticalBlock"],
 div[data-testid="stHorizontalBlock"]:has(.plexus-cal-header)> div[data-testid="column"] > div[data-testid="stVerticalBlock"] {
     gap:0 !important; padding:0 !important}
 div[data-testid="stHorizontalBlock"]:has(.cal-overlay-cell) div[data-testid="element-container"],
+div[data-testid="stHorizontalBlock"]:has(.plexus-cell-marker) div[data-testid="element-container"],
 div[data-testid="stHorizontalBlock"]:has(.plexus-grey-cell) div[data-testid="element-container"],
 div[data-testid="stHorizontalBlock"]:has(.plexus-dim-cell)  div[data-testid="element-container"],
 div[data-testid="stHorizontalBlock"]:has(.plexus-cal-header)div[data-testid="element-container"] {
     margin:0 !important; padding:0 !important}
 div[data-testid="stHorizontalBlock"]:has(.cal-overlay-cell) div[data-testid="stMarkdownContainer"],
+div[data-testid="stHorizontalBlock"]:has(.plexus-cell-marker) div[data-testid="stMarkdownContainer"],
 div[data-testid="stHorizontalBlock"]:has(.plexus-grey-cell) div[data-testid="stMarkdownContainer"],
 div[data-testid="stHorizontalBlock"]:has(.plexus-dim-cell)  div[data-testid="stMarkdownContainer"],
 div[data-testid="stHorizontalBlock"]:has(.plexus-cal-header)div[data-testid="stMarkdownContainer"] {
     margin:0 !important; padding:0 !important}
+
+/* ── Kalender-celler som knapper ─────────────────────────────────────────── */
+/* Marker-div er usynlig; CSS bruger den til at style den efterfølgende knap */
+.plexus-cell-marker{display:none}
+div[data-testid="element-container"]:has(.plexus-cell-marker)
+  + div[data-testid="element-container"] div[data-testid="stButton"] > button {
+    height:72px !important; width:100% !important;
+    text-align:left !important; padding:5px 6px !important;
+    white-space:pre-line !important; border-radius:0 !important;
+    font-size:12px !important; line-height:1.3 !important;
+    font-weight:500 !important; margin:0 !important;
+    transition:filter .12s !important; cursor:pointer !important;
+    display:block !important}
+div[data-testid="element-container"]:has(.plexus-cell-marker)
+  + div[data-testid="element-container"] div[data-testid="stButton"] > button:hover {
+    filter:brightness(0.90) !important}
+/* Setup: OPEN */
+div[data-testid="element-container"]:has(.plexus-cell-open)
+  + div[data-testid="element-container"] div[data-testid="stButton"] > button {
+    background:#c8e6c9 !important; color:#1b5e20 !important;
+    border:1px solid #43a047 !important; border-top:3px solid #43a047 !important}
+/* Setup: CLOSED */
+div[data-testid="element-container"]:has(.plexus-cell-closed-s)
+  + div[data-testid="element-container"] div[data-testid="stButton"] > button {
+    background:#ffcdd2 !important; color:#b71c1c !important;
+    border:1px solid #e53935 !important; border-top:3px solid #e53935 !important}
+/* Pref: ikke valgt */
+div[data-testid="element-container"]:has(.plexus-cell-pref-none)
+  + div[data-testid="element-container"] div[data-testid="stButton"] > button {
+    background:#f8f9fa !important; color:#555 !important;
+    border:1px solid #dee2e6 !important; border-top:3px solid #dee2e6 !important}
+/* Pref: sikker/ja */
+div[data-testid="element-container"]:has(.plexus-cell-pref-ja)
+  + div[data-testid="element-container"] div[data-testid="stButton"] > button {
+    background:#c8e6c9 !important; color:#1b5e20 !important;
+    border:1px solid #43a047 !important; border-top:3px solid #43a047 !important}
+/* Pref: måske */
+div[data-testid="element-container"]:has(.plexus-cell-pref-maybe)
+  + div[data-testid="element-container"] div[data-testid="stButton"] > button {
+    background:#fff9c4 !important; color:#6d4c00 !important;
+    border:1px solid #fbc02d !important; border-top:3px solid #fbc02d !important}
 
 /* ── Kalender-wrapper: ydre ramme & afrunding via st.container() ────────── */
 .plexus-cal-boundary {display:none}
@@ -879,7 +925,6 @@ def render_setup_kalender(mkey: str) -> dict:
         st.session_state[sk] = (dict(cfg["date_types"]) if "date_types" in cfg
                                  else default_date_types(y, m))
 
-    st.markdown(OVERLAY_CAL_CSS, unsafe_allow_html=True)
     with st.container():
       st.markdown('<div class="plexus-cal-boundary"></div>', unsafe_allow_html=True)
       _dag_header()
@@ -894,12 +939,15 @@ def render_setup_kalender(mkey: str) -> dict:
                 state = st.session_state[sk].get(d_str, CLOSED)
                 if state not in SETUP_CYCLE:
                     state = CLOSED
-                bg, border, text, icon, label = SETUP_STYLE[state]
+                _, _, _, icon, lbl = SETUP_STYLE[state]
                 next_s = SETUP_CYCLE[state]
-                _colored_cell(bg, border, text, DAG_LANG[i][:3], day, MÅN_GEN[m][:3],
-                               f"{icon} {label}", overlay=True)
-                if st.button(f"→ {SETUP_STYLE[next_s][3]} {SETUP_STYLE[next_s][4]}",
-                             key=f"sc_{mkey}_{d_str}", use_container_width=True):
+                css_cls = "plexus-cell-open" if state == OPEN else "plexus-cell-closed-s"
+                st.markdown(
+                    f'<div class="plexus-cell-marker {css_cls}"></div>',
+                    unsafe_allow_html=True)
+                btn_lbl = f"{DAG_LANG[i][:3]}  {icon} {lbl}\n{day}. {MÅN_GEN[m][:3]}"
+                if st.button(btn_lbl, key=f"sc_{mkey}_{d_str}",
+                             use_container_width=True):
                     st.session_state[sk][d_str] = next_s
                     st.rerun()
     return dict(st.session_state[sk])
@@ -924,7 +972,10 @@ def render_pref_kalender(mkey: str, vid: str, date_types: dict, existing: dict) 
         st.session_state[sk] = dict(existing)
     rel_set = {d for d, t in date_types.items() if t in (OPEN, ACTIVITY)}
 
-    st.markdown(OVERLAY_CAL_CSS, unsafe_allow_html=True)
+    _PREF_CLS = {"": "plexus-cell-pref-none",
+                  "sikker": "plexus-cell-pref-ja",
+                  "måske":  "plexus-cell-pref-maybe"}
+
     with st.container():
       st.markdown('<div class="plexus-cal-boundary"></div>', unsafe_allow_html=True)
       _dag_header()
@@ -943,19 +994,20 @@ def render_pref_kalender(mkey: str, vid: str, date_types: dict, existing: dict) 
                     state = st.session_state[sk].get(d_str, "")
                     if state not in PREF_STYLE:
                         state = ""
-                    bg, border, text, icon, label = PREF_STYLE[state]
+                    _, _, _, icon, lbl = PREF_STYLE[state]
                     next_s = PREF_CYCLE[state]
-                    _, _, _, n_icon, n_label = PREF_STYLE[next_s]
-                    _colored_cell(bg, border, text, DAG_LANG[i][:3], day, MÅN_GEN[m][:3],
-                                   f"{icon} {label}", overlay=True)
-                    if st.button(f"→ {n_icon} {n_label}",
-                                 key=f"vp_{mkey}_{vid}_{d_str}", use_container_width=True):
+                    css_cls = _PREF_CLS.get(state, "plexus-cell-pref-none")
+                    st.markdown(
+                        f'<div class="plexus-cell-marker {css_cls}"></div>',
+                        unsafe_allow_html=True)
+                    btn_lbl = f"{DAG_LANG[i][:3]}  {icon} {lbl}\n{day}. {MÅN_GEN[m][:3]}"
+                    if st.button(btn_lbl, key=f"vp_{mkey}_{vid}_{d_str}",
+                                 use_container_width=True):
                         st.session_state[sk][d_str] = next_s
                         st.rerun()
                 elif cfg_typ == CLOSED:
-                    _grey_cell_nobutton(DAG_LANG[i][:3], day, MÅN_GEN[m][:3], "📅 Planlagt lukket")
+                    _grey_cell_nobutton(DAG_LANG[i][:3], day, MÅN_GEN[m][:3], "📅 Lukket")
                 else:
-                    # Dag uden konfiguration (burde ikke ske) — neutral tom celle
                     _empty_cell()
 
     return dict(st.session_state[sk])
@@ -1781,13 +1833,13 @@ def _tab_resultater(data: dict):
         st.info("📭 Ingen vagter er tildelt endnu.")
         return
 
-    # Sikr at session-state peger på en gyldig måned (fx efter genberegning)
-    cur_sel = st.session_state.get("resultater_month_select")
-    if cur_sel not in tildelte:
+    # Sikr at session-state peger på en gyldig måned
+    # (sættes KUN hvis ugyldig – undgår conflict med selectbox-widget)
+    if st.session_state.get("resultater_month_select") not in tildelte:
         st.session_state["resultater_month_select"] = tildelte[0]
 
+    # Brug IKKE index= når session-state allerede styrer værdien
     mkey = st.selectbox("Vælg måned", tildelte,
-                        index=tildelte.index(st.session_state["resultater_month_select"]),
                         format_func=mk_label, key="resultater_month_select")
     asgn = data["assignments"].get(mkey, {})
     if not asgn:
