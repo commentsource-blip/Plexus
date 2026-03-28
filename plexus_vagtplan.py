@@ -1131,8 +1131,7 @@ def _vis_vagtplan(data: dict, vid: str, vol: dict, mkey: str):
     else:
         st.info("Du er ikke tildelt vagter denne måned.")
 
-    if len(my_open_shifts) < kraevet:
-        st.warning(f"⚠️ Du fik {kraevet - len(my_open_shifts)} færre vagt(er) end aftalt.")
+    # (ufyldt kvote vises ikke til frivillige — kun til administrator under Resultater)
 
 
 def _vis_praeference(data: dict, vid: str, vol: dict, mkey: str):
@@ -1514,39 +1513,139 @@ def _tab_tildeling(data: dict):
 
     allerede = mkey in data.get("assignments", {})
 
-    # ── Allerede tildelt: simpel visning + Omfordel vagter ────────────────────
+    # ── Allerede tildelt: Omfordel vagter med trin-baseret flow ─────────────────
     if allerede:
         asgn = data["assignments"][mkey]
-        st.caption(f"⏱️ Vagtplan genereret: {asgn.get('generated_at', '–')}  —  Se vagtplanen under fanen 📊 Resultater.")
-        st.markdown("---")
-        if "confirm_reassign" not in st.session_state:
-            st.session_state.confirm_reassign = None
-        st.markdown('<div class="plexus-warn-btn"></div>', unsafe_allow_html=True)
-        if st.button("⚠️ Omfordel vagter", use_container_width=True, key="reassign_btn"):
-            st.session_state.confirm_reassign = mkey
-        if st.session_state.confirm_reassign == mkey:
-            st.warning(f"⚠️ Dette sletter og genberegner vagtplanen for **{mk_label(mkey)}**. Er du sikker?")
-            ca, cb_ = st.columns(2)
-            if ca.button("✅ Ja, genberegn", type="primary",
-                         use_container_width=True, key="ja_reassign"):
+        re_key = f"reassign_view_{mkey}"
+        if re_key not in st.session_state:
+            st.session_state[re_key] = "oversigt"
+
+        if st.session_state[re_key] == "oversigt":
+            # ── Trin 1: Overblik + knap til at gå videre ─────────────────────
+            st.caption(f"⏱️ Vagtplan genereret: {asgn.get('generated_at', '–')}  —  Se vagtplanen under fanen 📊 Resultater.")
+            st.markdown("---")
+            st.markdown('<div class="plexus-warn-btn"></div>', unsafe_allow_html=True)
+            if st.button("⚠️ Omfordel vagter", use_container_width=True, key="reassign_btn"):
                 if not prefs_m:
                     st.error("Ingen ønsker indsendt — kan ikke genberegne.")
                 else:
-                    # Ryd eksisterende tildeling og låste vagter, beregn forfra
-                    del data["assignments"][mkey]
-                    st.session_state.pop(f"locked_{mkey}", None)
-                    data = auto_assign(data, mkey, locked_shifts=None)
-                    save(data)
-                    st.session_state.confirm_reassign = None
-                    # Nulstil resultater-valg til nyeste måned
-                    newest = sorted(data.get("assignments", {}).keys(), reverse=True)
-                    if newest:
-                        st.session_state["resultater_month_select"] = newest[0]
-                    st.success("🎉 Vagtplan genberegnet!")
-                    st.balloons()
+                    st.session_state[re_key] = "lås"
                     st.rerun()
-            if cb_.button("❌ Annuller", use_container_width=True, key="nej_reassign"):
-                st.session_state.confirm_reassign = None
+
+        else:
+            # ── Trin 2: Gennemgå/rediger låste vagter, generer derefter ──────
+            if st.button("← Tilbage", use_container_width=True, key="back_reassign_btn"):
+                st.session_state[re_key] = "oversigt"
+                st.rerun()
+
+            cfg_m    = data["monthly_config"].get(mkey, {})
+            y_m, m_m = int(mkey[:4]), int(mkey[5:7])
+            dt_m     = get_date_types(cfg_m, y_m, m_m)
+            open_days_m = sorted(d for d, t in dt_m.items() if t in (OPEN, ACTIVITY))
+
+            lock_key = f"locked_{mkey}"
+            if lock_key not in st.session_state:
+                st.session_state[lock_key] = {}
+            locked: dict = st.session_state[lock_key]
+
+            if akt_vols:
+                st.markdown("### 🔵 Gennemgå låste vagter")
+                st.caption(
+                    "Her kan du justere de låste vagter inden genberegning. "
+                    "Låste tildelinger tæller med i kvoten og respekteres af den automatiske fordeling."
+                )
+
+                if not open_days_m:
+                    st.info("Ingen åbningsdage konfigureret for denne måned.")
+                else:
+                    st.markdown(OVERLAY_CAL_CSS, unsafe_allow_html=True)
+                    with st.container():
+                        st.markdown('<div class="plexus-cal-boundary"></div>', unsafe_allow_html=True)
+                        _dag_header()
+                        for week in calendar.monthcalendar(y_m, m_m):
+                            cols = st.columns(7)
+                            for i, day in enumerate(week):
+                                with cols[i]:
+                                    if day == 0:
+                                        _empty_cell()
+                                        continue
+                                    d_str = date(y_m, m_m, day).isoformat()
+                                    if d_str not in open_days_m:
+                                        _grey_cell_nobutton(DAG_LANG[i], day, MÅN_GEN[m_m][:3], "📅 Lukket")
+                                        continue
+                                    dag_locked = locked.get(d_str, [])
+                                    navne_html = "".join(
+                                        f'<div style="font-size:10px;margin-top:2px;padding:1px 5px;'
+                                        f'border-radius:4px;background:#bbdefb;color:#0d47a1;font-weight:600">'
+                                        f'🔒 {aktive[vid]["name"]}</div>'
+                                        for vid in dag_locked if vid in aktive
+                                    )
+                                    oensker_html = ""
+                                    for vid, v in akt_vols.items():
+                                        if vid in dag_locked:
+                                            continue
+                                        pref = prefs_m.get(vid, {}).get(d_str, "")
+                                        if pref == "sikker":
+                                            oensker_html += (
+                                                f'<div style="font-size:10px;margin-top:2px;padding:1px 5px;'
+                                                f'border-radius:4px;background:#c8e6c9;color:#1b5e20">'
+                                                f'✅ {v["name"]}</div>')
+                                        elif pref == "måske":
+                                            oensker_html += (
+                                                f'<div style="font-size:10px;margin-top:2px;padding:1px 5px;'
+                                                f'border-radius:4px;background:#fff9c4;color:#6d4c00">'
+                                                f'🟡 {v["name"]}</div>')
+                                    bg     = "#e3f2fd" if dag_locked else "#fafafa"
+                                    border = "#1e88e5" if dag_locked else "#e0e0e0"
+                                    text_c = "#0d47a1" if dag_locked else "#555"
+                                    st.markdown(
+                                        f'<div style="border:1px solid {border};'
+                                        f'border-top:3px solid {border};'
+                                        f'padding:8px 5px;background:{bg};'
+                                        f'min-height:90px;margin-bottom:2px">'
+                                        f'<div style="font-size:10px;font-weight:700;color:{text_c}">{DAG_LANG[i]}</div>'
+                                        f'<div style="font-size:22px;font-weight:900;color:{text_c};line-height:1">{day}</div>'
+                                        f'<div style="font-size:9px;color:{text_c};margin-bottom:3px">{MÅN_GEN[m_m][:3]}</div>'
+                                        f'{navne_html}{oensker_html}</div>',
+                                        unsafe_allow_html=True)
+                                    avail_for_lock = sorted(
+                                        [vid for vid in akt_vols if vid not in dag_locked],
+                                        key=lambda v: aktive[v]["name"]
+                                    )
+                                    if avail_for_lock:
+                                        valgt = st.selectbox(
+                                            "Tilføj",
+                                            ["—"] + [aktive[v]["name"] for v in avail_for_lock],
+                                            key=f"re_lock_sel_{mkey}_{d_str}",
+                                            label_visibility="collapsed")
+                                        if valgt != "—":
+                                            vid_valgt = next(v for v in avail_for_lock
+                                                             if aktive[v]["name"] == valgt)
+                                            locked.setdefault(d_str, [])
+                                            if vid_valgt not in locked[d_str]:
+                                                locked[d_str].append(vid_valgt)
+                                                st.rerun()
+                                    if dag_locked:
+                                        if st.button("🗑 Ryd", key=f"re_lock_clear_{mkey}_{d_str}",
+                                                     use_container_width=True):
+                                            locked.pop(d_str, None)
+                                            st.rerun()
+            else:
+                st.info("Ingen aktivitetsfrivillige — genberegner med eksisterende præferencer.")
+
+            st.markdown("---")
+            if st.button("🚀 Generer og udgiv vagtplan", type="primary",
+                         use_container_width=True, key="ja_reassign"):
+                del data["assignments"][mkey]
+                locked_shifts_kept = st.session_state.get(f"locked_{mkey}", {})
+                data = auto_assign(data, mkey, locked_shifts=locked_shifts_kept)
+                save(data)
+                st.session_state[re_key] = "oversigt"
+                newest = sorted(data.get("assignments", {}).keys(), reverse=True)
+                if newest:
+                    st.session_state["resultater_month_select"] = newest[0]
+                st.success("🎉 Vagtplan genberegnet!")
+                st.balloons()
                 st.rerun()
 
         st.markdown("---")
