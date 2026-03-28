@@ -168,14 +168,14 @@ OVERLAY_CAL_CSS = """
 <style>
 div[data-testid="stMarkdownContainer"]:has(.cal-overlay-cell)
   + div[data-testid="stButton"] {
-    margin-top: -110px !important;
-    height: 110px !important;
+    margin-top: -72px !important;
+    height: 72px !important;
     position: relative;
     z-index: 10;
 }
 div[data-testid="stMarkdownContainer"]:has(.cal-overlay-cell)
   + div[data-testid="stButton"] > button {
-    height: 110px !important;
+    height: 72px !important;
     width: 100% !important;
     opacity: 0 !important;
     cursor: pointer !important;
@@ -185,6 +185,11 @@ div[data-testid="stMarkdownContainer"]:has(.cal-overlay-cell)
     padding: 0 !important;
     display: block !important;
     border-radius: 0 !important;
+}
+/* Hover-glow på cellen: viser at hele fladen er klikbar */
+.cal-overlay-cell:hover {
+    filter: brightness(0.93) !important;
+    cursor: pointer !important;
 }
 </style>
 """
@@ -388,15 +393,15 @@ def _colored_cell(bg, border, text, dag, day, maan, status, overlay=False):
     st.markdown(
         f'<div{cls} style="background:{bg};border:1px solid {border};'
         f'border-top:3px solid {border};'
-        f'padding:8px 6px;vertical-align:top;height:120px;box-sizing:border-box;'
-        f'display:flex;flex-direction:column;">'
-        f'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:2px">'
-        f'<span style="font-size:10px;font-weight:700;color:{text};'
-        f'text-transform:uppercase;letter-spacing:0.4px">{dag}</span>'
-        f'<span style="font-size:10px;font-weight:600;color:{text};white-space:nowrap">{status}</span>'
+        f'padding:5px 6px;vertical-align:top;height:72px;box-sizing:border-box;'
+        f'display:flex;flex-direction:column;gap:0">'
+        f'<div style="display:flex;justify-content:space-between;align-items:center">'
+        f'<span style="font-size:9px;font-weight:700;color:{text};'
+        f'text-transform:uppercase;letter-spacing:0.3px;opacity:0.85">{dag}</span>'
+        f'<span style="font-size:9px;font-weight:600;color:{text};white-space:nowrap;opacity:0.85">{status}</span>'
         f'</div>'
-        f'<div style="font-size:24px;font-weight:900;color:{text};line-height:1.1">{day}</div>'
-        f'<div style="font-size:9px;color:{text};opacity:0.75">{maan}</div>'
+        f'<div style="font-size:20px;font-weight:900;color:{text};line-height:1.15;margin-top:1px">{day}</div>'
+        f'<div style="font-size:9px;color:{text};opacity:0.7;margin-top:1px">{maan}</div>'
         f'</div>', unsafe_allow_html=True)
 
 
@@ -404,15 +409,15 @@ def _grey_cell_nobutton(dag, day, maan, label=""):
     """Grå celle UDEN knap — vises for ikke-valgbare dage."""
     st.markdown(
         f'<div class="plexus-grey-cell" style="background:#f5f5f5;border:1px solid #e0e0e0;'
-        f'padding:8px 6px;vertical-align:top;'
-        f'height:120px;box-sizing:border-box;display:flex;flex-direction:column;'
+        f'padding:5px 6px;vertical-align:top;'
+        f'height:72px;box-sizing:border-box;display:flex;flex-direction:column;gap:0;'
         f'color:#bbb;opacity:0.6">'
-        f'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:2px">'
-        f'<span style="font-size:10px;font-weight:700;text-transform:uppercase">{dag}</span>'
-        f'<span style="font-size:10px;font-weight:600;white-space:nowrap">{label}</span>'
+        f'<div style="display:flex;justify-content:space-between;align-items:center">'
+        f'<span style="font-size:9px;font-weight:700;text-transform:uppercase">{dag}</span>'
+        f'<span style="font-size:9px;font-weight:600;white-space:nowrap">{label}</span>'
         f'</div>'
-        f'<div style="font-size:24px;font-weight:900;line-height:1.1">{day}</div>'
-        f'<div style="font-size:9px;opacity:0.8">{maan}</div>'
+        f'<div style="font-size:20px;font-weight:900;line-height:1.15;margin-top:1px">{day}</div>'
+        f'<div style="font-size:9px;opacity:0.8;margin-top:1px">{maan}</div>'
         f'</div>', unsafe_allow_html=True)
 
 
@@ -430,7 +435,7 @@ def _non_vagtdag_cell(dag, day, maan):
 
 
 def _empty_cell():
-    st.markdown('<div style="height:120px;box-sizing:border-box"></div>', unsafe_allow_html=True)
+    st.markdown('<div style="height:72px;box-sizing:border-box"></div>', unsafe_allow_html=True)
 
 
 # ── Fordelingsalgoritme ───────────────────────────────────────────────────────
@@ -1459,20 +1464,23 @@ def _tab_opstaetning(data: dict):
 
     st.markdown("---")
     st.markdown("**📅 Seneste rettidige indsendelse (deadline)**")
-    default_dl  = default_deadline(år, mdr)
-    existing_dl = default_dl
+    default_dl = default_deadline(år, mdr)
+    # Brug altid default (3 dage før måneden) medmindre en deadline er eksplicit gemt
+    # for præcis denne måned. Nøglen inkluderer mkey så widget nulstilles ved månedsskift.
     if cfg.get("deadline"):
         try:
             existing_dl = date.fromisoformat(cfg["deadline"])
         except (ValueError, TypeError):
             existing_dl = default_dl
+    else:
+        existing_dl = default_dl
 
     deadline_val = st.date_input(
         "Deadline for indsendelse af ønsker",
         value=existing_dl,
         min_value=date(år - 1, 1, 1),
         max_value=date(år, mdr, 1) - timedelta(days=1),
-        key="deadline_input",
+        key=f"deadline_input_{mkey}",
         format="DD-MM-YYYY",
         help="Vises til de frivillige som en påmindelse. Påvirker ikke systemet automatisk.")
     st.caption(
