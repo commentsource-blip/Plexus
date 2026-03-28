@@ -1340,6 +1340,41 @@ def _tab_frivillige(data: dict):
                 else:
                     st.error("Adgangskoderne matcher ikke.")
 
+    st.markdown("---")
+    with st.expander("🗑️ Nulstil alle data"):
+        st.caption(
+            "Sletter alle vagtplaner, indsendte ønsker og måneds-opsætninger. "
+            "Frivilligopsætningen bevares.")
+        if "confirm_reset_all" not in st.session_state:
+            st.session_state.confirm_reset_all = False
+        if not st.session_state.confirm_reset_all:
+            st.markdown('<div class="plexus-danger-btn"></div>', unsafe_allow_html=True)
+            if st.button("🗑️ Slet alle vagtplaner og opsætninger",
+                         use_container_width=True, key="reset_all_btn"):
+                st.session_state.confirm_reset_all = True
+                st.rerun()
+        else:
+            st.error("⚠️ **Er du sikker?** Dette kan ikke fortrydes!")
+            ca, cb = st.columns(2)
+            if ca.button("✅ Ja, slet alt", type="primary",
+                         use_container_width=True, key="confirm_reset_yes"):
+                data["monthly_config"] = {}
+                data["preferences"]    = {}
+                data["assignments"]    = {}
+                # Ryd alle session-state nøgler relateret til kalendre og låsninger
+                for k in list(st.session_state.keys()):
+                    if any(k.startswith(p) for p in
+                           ("sc_", "vp_", "locked_", "tildeling_view_",
+                            "reassign_view_", "resultater_month_select")):
+                        del st.session_state[k]
+                save(data)
+                st.session_state.confirm_reset_all = False
+                st.success("✅ Alle vagtplaner og opsætninger er slettet.")
+                st.rerun()
+            if cb.button("❌ Annuller", use_container_width=True, key="confirm_reset_no"):
+                st.session_state.confirm_reset_all = False
+                st.rerun()
+
 
 # ── Tab: Måneds-opsætning ──────────────────────────────────────────────────────
 def _tab_opstaetning(data: dict):
@@ -1678,22 +1713,36 @@ def _tab_tildeling(data: dict):
 
     # ─── TRIN 1: Oversigt ────────────────────────────────────────────────────
     if view == "oversigt":
-        c1, _ = st.columns(2)
-        c1.metric("📋 Indsendte ønsker", f"{len(prefs_m)}/{len(aktive)}")
-        col_ja, col_nej = st.columns(2)
-        with col_ja:
-            st.markdown("**✅ Klar:**")
-            for vid, v in aktive.items():
-                if vid in prefs_m:
-                    s  = sum(1 for p in prefs_m[vid].values() if p == "sikker")
-                    ms = sum(1 for p in prefs_m[vid].values() if p == "måske")
-                    akt_lbl = " 🔵" if v.get("aktivitetsudvalg") else ""
-                    st.write(f"• {v['name']}{akt_lbl}  *(Ja: {s} / Måske: {ms})*")
-        with col_nej:
-            st.markdown("**❌ Mangler:**")
-            for vid, v in aktive.items():
-                if vid not in prefs_m:
-                    st.write(f"• {v['name']}")
+        klar   = [(vid, v) for vid, v in aktive.items() if vid in prefs_m]
+        mangler = [(vid, v) for vid, v in aktive.items() if vid not in prefs_m]
+
+        c_metric, _ = st.columns(2)
+        c_metric.metric("📋 Indsendte ønsker", f"{len(klar)}/{len(aktive)}")
+
+        # Kompakt inline visning — alle navne på én linje med badges
+        def _navn_badges(items, label_fn):
+            if not items:
+                return f"*Ingen*"
+            return " &nbsp; ".join(label_fn(vid, v) for vid, v in
+                                   sorted(items, key=lambda x: x[1]["name"]))
+
+        def _klar_badge(vid, v):
+            s  = sum(1 for p in prefs_m[vid].values() if p == "sikker")
+            ms = sum(1 for p in prefs_m[vid].values() if p == "måske")
+            akt = " 🔵" if v.get("aktivitetsudvalg") else ""
+            return (f'<span style="display:inline-block;background:#e8f5e9;color:#1b5e20;'
+                    f'border-radius:5px;padding:2px 7px;font-size:12px;margin:2px">'
+                    f'{v["name"]}{akt} <span style="opacity:0.7">✅{s} 🟡{ms}</span></span>')
+
+        def _mangler_badge(vid, v):
+            return (f'<span style="display:inline-block;background:#ffebee;color:#c62828;'
+                    f'border-radius:5px;padding:2px 7px;font-size:12px;margin:2px">'
+                    f'{v["name"]}</span>')
+
+        st.markdown("**✅ Klar:**")
+        st.markdown(_navn_badges(klar, _klar_badge), unsafe_allow_html=True)
+        st.markdown("**❌ Mangler:**")
+        st.markdown(_navn_badges(mangler, _mangler_badge), unsafe_allow_html=True)
         st.markdown("---")
         if st.button("➡️ Gå videre til vagttildeling", type="primary",
                      use_container_width=True, key="goto_tildeling_btn"):
