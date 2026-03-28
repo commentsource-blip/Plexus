@@ -4,7 +4,7 @@ Plexus Vagtplan
 Lavet af Fabian Salvatore
 """
 import streamlit as st
-import json, os, calendar
+import json, os, calendar, random
 from datetime import date, datetime, timedelta
 
 VERSION     = date.today().strftime("%d.%m.%Y")
@@ -467,6 +467,7 @@ def auto_assign(data: dict, mkey: str, locked_shifts: dict | None = None) -> dic
     prefs_m  = data["preferences"].get(mkey, {})
     vols     = data["volunteers"]
     active   = [vid for vid, v in vols.items() if v.get("active", True)]
+    random.shuffle(active)   # Tilfældig startrækkefølge sikrer variation ved genberegning
 
     if not active_d or not active:
         data["assignments"][mkey] = {
@@ -590,7 +591,7 @@ def auto_assign(data: dict, mkey: str, locked_shifts: dict | None = None) -> dic
             return True
         cands = sorted(
             [v for v in active if eligible_open(v, d, max_pref_group)],
-            key=lambda v: (pref_group(v, d), fraction_done(v), -remaining[v])
+            key=lambda v: (pref_group(v, d), fraction_done(v), -remaining[v], random.random())
         )
         needed = min_per - len(shifts[d])
         if len(cands) < needed:
@@ -606,7 +607,7 @@ def auto_assign(data: dict, mkey: str, locked_shifts: dict | None = None) -> dic
           1. Længste gap-run FØRST (åbn bredt, ikke klumpet)
           2. Hverdag FREM FOR søndag
         """
-        return (-gap_run_length(d), weekday_score(d))
+        return (-gap_run_length(d), weekday_score(d), random.random())
 
     def try_open_all(max_pref_group: int):
         """
@@ -652,7 +653,7 @@ def auto_assign(data: dict, mkey: str, locked_shifts: dict | None = None) -> dic
         if not vols_left:
             break
         # Prioritér den med lavest andel tildelt (mest "bagud" relativt til kvote)
-        vols_left.sort(key=lambda v: (fraction_done(v), -remaining[v]))
+        vols_left.sort(key=lambda v: (fraction_done(v), -remaining[v], random.random()))
 
         assigned = False
         for vid in vols_left:
