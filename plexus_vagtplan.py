@@ -470,10 +470,10 @@ def auto_assign(data: dict, mkey: str, locked_shifts: dict | None = None) -> dic
         }
         return data
 
-    # Frivillige der har indsendt ønsker (hård begrænsning)
+    # Frivillige der har indsendt ønsker (hård begrænsning — tildeles KUN på ja/måske dage)
     has_submitted: set = set(prefs_m.keys())
 
-    # Præference-matrix: 2=sikker, 1=måske, 0=ingen/ikke-indsendt
+    # Præference-matrix: 2=sikker/ja, 1=måske, 0=ikke relevant for denne dag
     prio: dict = {
         vid: {
             d: (2 if prefs_m.get(vid, {}).get(d) == "sikker"
@@ -500,33 +500,49 @@ def auto_assign(data: dict, mkey: str, locked_shifts: dict | None = None) -> dic
 
     # ── Hjælpefunktioner ────────────────────────────────────────────────────
 
-    def can_work_this_day(vid: str, d: str) -> bool:
+    def can_work(vid: str, d: str) -> bool:
         """
         Hård begrænsning:
-        - Frivillig MED indsendte ønsker → kun dage med ja/måske (prio > 0)
-        - Frivillig UDEN indsendte ønsker → alle dage
+        Frivillige MED indsendte ønsker → KUN dage de sagde ja eller måske til.
+        Frivillige UDEN indsendte ønsker → alle aktive dage.
         """
         if vid in has_submitted:
             return prio[vid][d] > 0
         return True
 
     def pref_group(vid: str, d: str) -> int:
-        """Sorteringsniveau for kandidater på dag d. Lav = høj prioritet."""
+        """
+        Sorteringsniveau. Lav = høj prioritet.
+          0 = ja/sikker for denne dag
+          1 = måske for denne dag
+          2 = ingen indsendte ønsker (no-submitted) — tildeles sidst
+        """
+        if vid not in has_submitted:
+            return 2   # ingen ønsker — laveste prioritet
         p = prio[vid][d]
-        if p == 2: return 0   # ja/sikker
+        if p == 2: return 0   # ja
         if p == 1: return 1   # måske
-        return 2               # ingen præference (kun no-submitted folk når hertil)
+        return 2               # burde aldrig nås pga. can_work-begrænsning
+
+    def fraction_done(vid: str) -> float:
+        """
+        Andel af kvoten der allerede er tildelt (0.0–1.0).
+        Lav andel = har fået mindst relativt → prioriteres højest for ligelig fordeling.
+        """
+        q = quota[vid]
+        if q == 0:
+            return 1.0
+        return (q - remaining[vid]) / q
 
     def weekday_score(d: str) -> int:
         """0=hverdag (Man/Tirs/Ons), 1=søndag."""
         return 0 if day_obj[d].weekday() in {0, 1, 2} else 1
 
-    def _gap_run_length(d: str) -> int:
+    def gap_run_length(d: str) -> int:
         """
-        Længden af det sammenhængende lukkede interval (i active_d) som d er i.
-        Bruges til at prioritere dage midt i LANGE gap — sikrer at algoritmen
-        åbner én dag i hvert gap, frem for at klumpe i ét område.
-        Dage tæt på eksisterende åbne dage giver kort gap-længde.
+        Antal sammenhængende lukkede active_d-dage i det interval d tilhører.
+        Høj værdi = dag sidder midt i et langt lukket stræk → prioriteres
+        højere, så algoritmen åbner én dag i hvert gap frem for at klumpe.
         """
         try:
             idx = active_d.index(d)
@@ -542,39 +558,33 @@ def auto_assign(data: dict, mkey: str, locked_shifts: dict | None = None) -> dic
             if len(shifts[active_d[i]]) >= min_per:
                 break
             right += 1
-        return left + right + 1   # samlet run-length inkl. d selv
+        return left + right + 1
 
-    def eligible_open(vid: str, d: str, max_pref: int) -> bool:
+    def eligible_open(vid: str, d: str, max_pref_group: int) -> bool:
         """
-        Kan vid åbne dag d?
-        max_pref: 0=kun ja, 1=ja+måske, 2=alle inkl. ingen ønsker
+        Kan vid bruges til at åbne dag d i den givne fase?
+        max_pref_group: 0=kun ja-folk, 1=ja+måske-folk, 2=alle inkl. ingen ønsker
         """
-        if not can_work_this_day(vid, d):
+        if not can_work(vid, d):
             return False
-        if vid in shifts[d] or remaining[vid] <= 0:
+        if vid in shifts[d] or remaining[vid] <= 0 or len(shifts[d]) >= max_per:
             return False
-        if len(shifts[d]) >= max_per:
-            return False
-        p = prio[vid][d]
-        if max_pref == 0 and p < 2:
-            return False
-        if max_pref == 1 and p < 1:
-            # Tillad no-submitted folk med måske-niveau hvis de ikke har indsendt
-            if vid in has_submitted:
-                return False
-        return True
+        return pref_group(vid, d) <= max_pref_group
 
-    def fill_day(d: str, max_pref: int) -> bool:
+    def fill_day(d: str, max_pref_group: int) -> bool:
         """
         Forsøg at åbne dag d op til min_per.
-        Commit'er KUN hvis nok kandidater — ellers spildes ingen kvoter.
-        Kandidater sorteres: præference-gruppe, derefter flest resterende vagter.
+        Commit'er KUN hvis nok kandidater — spildes ingen kvoter ellers.
+        Kandidater sorteres:
+          1. Præference-gruppe (ja > måske > ingen)
+          2. Lavest andel af kvote tildelt (ligelig fordeling)
+          3. Flest absolutte vagter tilbage (tiebreaker)
         """
         if len(shifts[d]) >= min_per:
             return True
         cands = sorted(
-            [v for v in active if eligible_open(v, d, max_pref)],
-            key=lambda v: (pref_group(v, d), -remaining[v])
+            [v for v in active if eligible_open(v, d, max_pref_group)],
+            key=lambda v: (pref_group(v, d), fraction_done(v), -remaining[v])
         )
         needed = min_per - len(shifts[d])
         if len(cands) < needed:
@@ -586,97 +596,85 @@ def auto_assign(data: dict, mkey: str, locked_shifts: dict | None = None) -> dic
 
     def day_sort_key(d: str) -> tuple:
         """
-        Sorteringsnøgle for lukkede dage i try_open_all.
-        Prioritet: (1) længste gap-run FØRST, (2) hverdag FØRST.
-        Dette sikrer at algoritmen åbner én dag i hvert langt interval
-        frem for at klumpe i ét område af måneden.
+        Sortér lukkede dage:
+          1. Længste gap-run FØRST (åbn bredt, ikke klumpet)
+          2. Hverdag FREM FOR søndag
         """
-        return (-_gap_run_length(d), weekday_score(d))
+        return (-gap_run_length(d), weekday_score(d))
 
-    def try_open_all(max_pref: int):
+    def try_open_all(max_pref_group: int):
         """
-        Iterer over lukkede dage og forsøg at åbne dem.
-        Sorterer efter gap-run-length (længste gap FØRST) og hverdage.
-        Gentager til ingen fremskridt.
+        Gentag åbning af lukkede dage til ingen fremskridt.
+        Rækkefølge: longest-gap-first + hverdage først.
         """
         changed = True
         while changed:
             changed = False
-            closed = sorted(
-                [d for d in active_d if len(shifts[d]) < min_per],
-                key=day_sort_key
-            )
-            for d in closed:
+            for d in sorted([d for d in active_d if len(shifts[d]) < min_per],
+                            key=day_sort_key):
                 before = len(shifts[d])
-                if fill_day(d, max_pref) and before < min_per:
+                if fill_day(d, max_pref_group) and before < min_per:
                     changed = True
 
     # ════════════════════════════════════════════════════════════════════════
-    # FASE 1 — Åbn dage: KUN ja/sikker præferencer
+    # FASE 1 — Åbn dage med KUN ja/sikker-frivillige
+    # Hård begrænsning: submitted-folk kun på egne ja-dage
     # ════════════════════════════════════════════════════════════════════════
-    try_open_all(max_pref=0)
+    try_open_all(max_pref_group=0)
 
     # ════════════════════════════════════════════════════════════════════════
-    # FASE 2 — Åbn resterende: ja + måske præferencer
+    # FASE 2 — Åbn resterende dage: ja + måske
     # ════════════════════════════════════════════════════════════════════════
-    try_open_all(max_pref=1)
+    try_open_all(max_pref_group=1)
 
     # ════════════════════════════════════════════════════════════════════════
-    # FASE 3 — Åbn resterende: alle (inkl. ingen ønsker)
-    # Frivillige uden indsendte ønsker tildeles nu til lukkede dage
+    # FASE 3 — Åbn resterende dage: alle, inkl. ingen-ønsker-frivillige
     # ════════════════════════════════════════════════════════════════════════
-    try_open_all(max_pref=2)
+    try_open_all(max_pref_group=2)
 
     # ════════════════════════════════════════════════════════════════════════
-    # FASE 4 — Fordel resterende kvoter til åbne dage
-    # Hård begrænsning: has_submitted folk tildeles KUN egne datoer
+    # FASE 4 — Fordel resterende kvoter
+    # Mål: ligelig fordeling (alle ~samme % af kvote) + spredning
+    #
+    # Vælg frivillig med LAVEST andel tildelt (fraction_done) FØRST.
+    # For hver frivillig: foretrék åbne dage → hverdage → isolerede dage.
+    # Hård begrænsning overholdes: submitted-folk kun på egne ja/måske-dage.
     # ════════════════════════════════════════════════════════════════════════
-    # Frivilligen med flest resterende vagter håndteres FØRST.
-    # Pr. dag: åben dag > hverdag > gap-prioritet > mindst fyldt dag
-
     total_rem = sum(remaining.values())
     for _ in range(total_rem * 2 + 1):
         vols_left = [v for v in active if remaining[v] > 0]
         if not vols_left:
             break
-        vols_left.sort(key=lambda v: -remaining[v])
+        # Prioritér den med lavest andel tildelt (mest "bagud" relativt til kvote)
+        vols_left.sort(key=lambda v: (fraction_done(v), -remaining[v]))
 
         assigned = False
         for vid in vols_left:
             best_d     = None
             best_score = None
 
-            open_days_now  = [d for d in active_d if len(shifts[d]) >= min_per]
-            closed_days_now = [d for d in active_d if len(shifts[d]) < min_per]
-
-            # Byg kandidat-liste: åbne dage FØRST, derefter lukkede
-            # For lukkede dage: kun hvis vi stadig kan nå min_per
-            candidate_days = []
-            for d in open_days_now:
-                if can_work_this_day(vid, d) and vid not in shifts[d] and len(shifts[d]) < max_per:
-                    candidate_days.append(d)
-            # Forsøg også at hjælpe med at åbne lukkede dage
-            for d in closed_days_now:
-                if not can_work_this_day(vid, d):
+            for d in active_d:
+                if not can_work(vid, d):
                     continue
                 if vid in shifts[d] or len(shifts[d]) >= max_per:
                     continue
-                gap = min_per - len(shifts[d])
-                avail = sum(1 for v in active
-                            if can_work_this_day(v, d)
-                            and v not in shifts[d]
-                            and remaining[v] > 0
-                            and len(shifts[d]) < max_per)
-                if avail >= gap:
-                    candidate_days.append(d)
 
-            for d in candidate_days:
                 is_open = len(shifts[d]) >= min_per
-                opn  = 0 if is_open else 1
-                wday = weekday_score(d)
-                gap_pri = -_gap_run_length(d) if not is_open else 0
-                pg   = pref_group(vid, d)
-                fill = len(shifts[d])
+                if not is_open:
+                    # Tjek om dagen stadig kan åbnes med tilgængelige folk
+                    gap   = min_per - len(shifts[d])
+                    avail = sum(1 for v in active
+                                if can_work(v, d) and v not in shifts[d]
+                                and remaining[v] > 0 and len(shifts[d]) < max_per)
+                    if avail < gap:
+                        continue
+
+                opn     = 0 if is_open else 1          # åbne dage foretrækkes
+                wday    = weekday_score(d)              # hverdage foretrækkes
+                gap_pri = -gap_run_length(d) if not is_open else 0  # største gap
+                pg      = pref_group(vid, d)            # ja > måske > ingen
+                fill    = len(shifts[d])                # mindst fyldt
+
                 score = (opn, wday, gap_pri, pg, fill)
                 if best_score is None or score < best_score:
                     best_score = score
@@ -1545,6 +1543,10 @@ def _tab_tildeling(data: dict):
                     data = auto_assign(data, mkey, locked_shifts=None)
                     save(data)
                     st.session_state.confirm_reassign = None
+                    # Nulstil resultater-valg til nyeste måned
+                    newest = sorted(data.get("assignments", {}).keys(), reverse=True)
+                    if newest:
+                        st.session_state["resultater_month_select"] = newest[0]
                     st.success("🎉 Vagtplan genberegnet!")
                     st.balloons()
                     st.rerun()
@@ -1743,6 +1745,8 @@ def _tab_tildeling(data: dict):
                 data = auto_assign(data, mkey, locked_shifts=locked_shifts)
                 save(data)
                 st.session_state[view_key] = "oversigt"
+                # Sæt resultater-valg til den nyligt genererede måned
+                st.session_state["resultater_month_select"] = mkey
                 st.success("🎉 Vagter er tildelt og vagtplanen er udgivet!")
                 st.balloons()
                 st.rerun()
@@ -1756,8 +1760,13 @@ def _tab_resultater(data: dict):
         st.info("📭 Ingen vagter er tildelt endnu.")
         return
 
-    # Standard: den seneste måned med tildelte vagter (index=0 da reverse=True)
-    mkey = st.selectbox("Vælg måned", tildelte, index=0,
+    # Sikr at session-state peger på en gyldig måned (fx efter genberegning)
+    cur_sel = st.session_state.get("resultater_month_select")
+    if cur_sel not in tildelte:
+        st.session_state["resultater_month_select"] = tildelte[0]
+
+    mkey = st.selectbox("Vælg måned", tildelte,
+                        index=tildelte.index(st.session_state["resultater_month_select"]),
                         format_func=mk_label, key="resultater_month_select")
     asgn = data["assignments"].get(mkey, {})
     if not asgn:
@@ -1794,10 +1803,12 @@ def _tab_resultater(data: dict):
     closed_for_cal = asgn.get("closed", [])
 
     if asgn.get("unmet_quota"):
-        with st.expander("⚠️ Frivillige med ufyldt kvote"):
-            for vid, mangler in asgn["unmet_quota"].items():
-                navn = vols.get(vid, {}).get("name", vid)
-                st.write(f"• **{navn}** mangler {mangler} vagt(er)")
+        st.markdown("**⚠️ Frivillige med ufyldt kvote:**")
+        for vid, mangler in asgn["unmet_quota"].items():
+            navn = vols.get(vid, {}).get("name", vid)
+            st.warning(f"• **{navn}** — fik {mangler} færre vagt(er) end aftalt")
+    else:
+        st.success("✅ Alle frivillige har fået deres fulde kvote tildelt")
 
     st.markdown("### 📅 Kalender-oversigt (Admin — alle tildelinger)")
     # Admin-kalender: volunteer_view=False → navne vises på ALLE dage inkl. lukkedage
